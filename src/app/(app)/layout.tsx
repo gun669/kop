@@ -37,7 +37,10 @@ export default async function AppLayout({
     { href: "/dashboard", label: "Dashboard", roles: ["owner", "manager", "receptionist", "teacher"] },
     { href: "/checkin", label: "Check-in", roles: ["owner", "manager", "receptionist"] },
     { href: "/schedule", label: "Schedule", roles: ["owner", "manager"] },
+    { href: "/templates", label: "Templates", roles: ["owner", "manager"] },
+    { href: "/class-types", label: "Class types", roles: ["owner", "manager"] },
     { href: "/money", label: "Revenue & expenses", roles: ["owner", "manager"] },
+    { href: "/team", label: "Team", roles: ["owner", "manager"] },
   ];
 
   return (

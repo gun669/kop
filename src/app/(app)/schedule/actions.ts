@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { and, eq, gte, lt, count } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { getSession, getAccessibleStudios } from "@/lib/auth";
+import { combineLocalDateTime, localDateKey, weekDays } from "@/lib/time";
 
 async function assertManagerAccess(studioId: number) {
   const session = await getSession();
@@ -14,27 +15,6 @@ async function assertManagerAccess(studioId: number) {
     throw new Error("Not allowed to edit the schedule");
   }
   return { session, studio };
-}
-
-function combineLocalDateTime(dateStr: string, timeStr: string, timezone: string) {
-  // dateStr: "2026-09-07", timeStr: "09:30" — both in the studio's local time.
-  // Build the UTC instant by anchoring at UTC noon on that date (safe for
-  // realistic studio timezones) and then applying the timezone's offset.
-  const [h, m] = timeStr.split(":").map(Number);
-  const noonUtc = new Date(`${dateStr}T12:00:00Z`);
-  const offsetFmt = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "longOffset" });
-  const offsetPart = offsetFmt.formatToParts(noonUtc).find((p) => p.type === "timeZoneName")!.value;
-  const match = offsetPart.match(/GMT([+-])(\d{2}):(\d{2})/);
-  const sign = match?.[1] === "-" ? -1 : 1;
-  const offsetMinutes = match ? sign * (Number(match[2]) * 60 + Number(match[3])) : 0;
-  // Local midnight (UTC instant) for dateStr:
-  const localMidnightUtc = new Date(Date.UTC(
-    Number(dateStr.slice(0, 4)),
-    Number(dateStr.slice(5, 7)) - 1,
-    Number(dateStr.slice(8, 10)),
-    0, 0, 0
-  ) - offsetMinutes * 60_000);
-  return new Date(localMidnightUtc.getTime() + (h * 60 + m) * 60_000);
 }
 
 export async function createSessionAction(formData: FormData) {
@@ -167,6 +147,52 @@ export async function copyWeekAction(formData: FormData) {
         room: s.room,
         startsAt: new Date(s.startsAt.getTime() + shift),
         capacity: s.capacity,
+        status: "scheduled" as const,
+      }))
+    );
+  }
+
+  revalidatePath("/schedule");
+}
+
+// Inserts every slot from a saved template into a specific week — additive,
+// like copyWeekAction, so applying a template on top of an already-partly-
+// filled week doesn't wipe anything out.
+export async function applyTemplateAction(formData: FormData) {
+  const studioId = Number(formData.get("studioId"));
+  const { studio } = await assertManagerAccess(studioId);
+
+  const templateId = Number(formData.get("templateId"));
+  const weekStart = new Date(String(formData.get("weekStart")));
+
+  const slots = await db
+    .select()
+    .from(schema.scheduleTemplateSlots)
+    .innerJoin(
+      schema.scheduleTemplates,
+      eq(schema.scheduleTemplateSlots.templateId, schema.scheduleTemplates.id)
+    )
+    .where(
+      and(
+        eq(schema.scheduleTemplateSlots.templateId, templateId),
+        eq(schema.scheduleTemplates.studioId, studioId)
+      )
+    );
+
+  if (slots.length > 0) {
+    const days = weekDays(weekStart);
+    await db.insert(schema.classSessions).values(
+      slots.map(({ schedule_template_slots: slot }) => ({
+        studioId,
+        teacherId: slot.teacherId,
+        classTypeId: slot.classTypeId,
+        room: slot.room,
+        startsAt: combineLocalDateTime(
+          localDateKey(days[slot.weekday] ?? days[0], studio.timezone),
+          slot.time,
+          studio.timezone
+        ),
+        capacity: slot.capacity,
         status: "scheduled" as const,
       }))
     );

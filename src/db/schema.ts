@@ -125,6 +125,9 @@ export const classTypes = pgTable("class_types", {
     .references(() => studios.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 80 }).notNull(),
   durationMinutes: integer("duration_minutes").notNull().default(60),
+  // Deactivated class types drop out of "add a class" pickers but stay
+  // attached to any past sessions that already used them.
+  active: boolean("active").notNull().default(true),
 });
 
 export const classSessions = pgTable("class_sessions", {
@@ -143,6 +146,41 @@ export const classSessions = pgTable("class_sessions", {
   capacity: integer("capacity").notNull().default(20),
   status: sessionStatusEnum("status").notNull().default("scheduled"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ---------- Recurring schedule templates ----------
+// A studio can save more than one named weekly pattern (e.g. "Default",
+// "High season"). The one with isDefault=true is the pattern used to
+// auto-fill an empty future week; any template can also be applied to a
+// specific week on demand from the schedule page.
+export const scheduleTemplates = pgTable("schedule_templates", {
+  id: serial("id").primaryKey(),
+  studioId: integer("studio_id")
+    .notNull()
+    .references(() => studios.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 80 }).notNull(),
+  isDefault: boolean("is_default").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const scheduleTemplateSlots = pgTable("schedule_template_slots", {
+  id: serial("id").primaryKey(),
+  templateId: integer("template_id")
+    .notNull()
+    .references(() => scheduleTemplates.id, { onDelete: "cascade" }),
+  // 0 = Monday .. 6 = Sunday, matching lib/time.ts's weekDays() ordering.
+  weekday: integer("weekday").notNull(),
+  // 24-hour "HH:MM" local time, same convention as the schedule page's
+  // <input type="time">.
+  time: varchar("time", { length: 5 }).notNull(),
+  teacherId: integer("teacher_id").references(() => teachers.id, {
+    onDelete: "set null",
+  }),
+  classTypeId: integer("class_type_id").references(() => classTypes.id, {
+    onDelete: "set null",
+  }),
+  room: varchar("room", { length: 60 }),
+  capacity: integer("capacity").notNull().default(20),
 });
 
 // ---------- Memberships ----------
@@ -225,7 +263,37 @@ export const studiosRelations = relations(studios, ({ many }) => ({
   teachers: many(teachers),
   guests: many(guests),
   classSessions: many(classSessions),
+  scheduleTemplates: many(scheduleTemplates),
 }));
+
+export const scheduleTemplatesRelations = relations(
+  scheduleTemplates,
+  ({ one, many }) => ({
+    studio: one(studios, {
+      fields: [scheduleTemplates.studioId],
+      references: [studios.id],
+    }),
+    slots: many(scheduleTemplateSlots),
+  })
+);
+
+export const scheduleTemplateSlotsRelations = relations(
+  scheduleTemplateSlots,
+  ({ one }) => ({
+    template: one(scheduleTemplates, {
+      fields: [scheduleTemplateSlots.templateId],
+      references: [scheduleTemplates.id],
+    }),
+    teacher: one(teachers, {
+      fields: [scheduleTemplateSlots.teacherId],
+      references: [teachers.id],
+    }),
+    classType: one(classTypes, {
+      fields: [scheduleTemplateSlots.classTypeId],
+      references: [classTypes.id],
+    }),
+  })
+);
 
 export const usersRelations = relations(users, ({ many }) => ({
   studioMemberships: many(studioMembers),

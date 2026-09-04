@@ -100,3 +100,28 @@ export function parseWeekParam(param: string | undefined, timeZone: string) {
   }
   return mondayOfWeek(timeZone);
 }
+
+// Combines a local "YYYY-MM-DD" date and "HH:MM" time (both in the given
+// timezone) into the UTC instant they represent. Shared by the schedule
+// editor's create/update actions and by schedule-template generation, which
+// both need to turn "this weekday, this local time" into a real timestamp.
+export function combineLocalDateTime(dateStr: string, timeStr: string, timeZone: string) {
+  const [h, m] = timeStr.split(":").map(Number);
+  const noonUtc = new Date(`${dateStr}T12:00:00Z`);
+  const offsetFmt = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" });
+  const offsetPart = offsetFmt.formatToParts(noonUtc).find((p) => p.type === "timeZoneName")!.value;
+  const match = offsetPart.match(/GMT([+-])(\d{2}):(\d{2})/);
+  const sign = match?.[1] === "-" ? -1 : 1;
+  const offsetMinutes = match ? sign * (Number(match[2]) * 60 + Number(match[3])) : 0;
+  const localMidnightUtc = new Date(
+    Date.UTC(
+      Number(dateStr.slice(0, 4)),
+      Number(dateStr.slice(5, 7)) - 1,
+      Number(dateStr.slice(8, 10)),
+      0,
+      0,
+      0
+    ) - offsetMinutes * 60_000
+  );
+  return new Date(localMidnightUtc.getTime() + (h * 60 + m) * 60_000);
+}

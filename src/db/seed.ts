@@ -19,6 +19,8 @@ function toDateStr(d: Date) {
 // open a direct connection to it — see /api/setup/route.ts for why).
 export async function seed() {
   console.log("Clearing existing data…");
+  await db.delete(schema.scheduleTemplateSlots);
+  await db.delete(schema.scheduleTemplates);
   await db.delete(schema.signIns);
   await db.delete(schema.memberships);
   await db.delete(schema.expenses);
@@ -35,7 +37,7 @@ export async function seed() {
   const [istanbul] = await db
     .insert(schema.studios)
     .values({
-      name: "Istanbul Studio",
+      name: "Kula Bebek",
       slug: "istanbul",
       city: "Istanbul",
       timezone: "Europe/Istanbul",
@@ -225,6 +227,66 @@ export async function seed() {
     capacity: 24,
     hourStart: 7,
     hourSpacing: 2, // 07:00 through 17:00 local, across two shalas
+  });
+
+  console.log("Creating default schedule templates…");
+  function pad(n: number) {
+    return String(n).padStart(2, "0");
+  }
+  async function makeDefaultTemplate(opts: {
+    studioId: number;
+    teachers: (typeof istTeachers)[number][];
+    classTypes: (typeof istClassTypes)[number][];
+    rooms: string[];
+    perDay: number;
+    capacity: number;
+    hourStart: number;
+    hourSpacing: number;
+  }) {
+    const [template] = await db
+      .insert(schema.scheduleTemplates)
+      .values({ studioId: opts.studioId, name: "Default", isDefault: true })
+      .returning();
+
+    const slots = [];
+    for (let weekday = 0; weekday < 7; weekday++) {
+      for (let i = 0; i < opts.perDay; i++) {
+        const hour = opts.hourStart + i * opts.hourSpacing;
+        slots.push({
+          templateId: template.id,
+          weekday,
+          time: `${pad(hour)}:00`,
+          teacherId: opts.teachers[i % opts.teachers.length].id,
+          classTypeId: opts.classTypes[i % opts.classTypes.length].id,
+          room: opts.rooms.length > 1 ? opts.rooms[i % opts.rooms.length] : opts.rooms[0] ?? null,
+          capacity: opts.capacity,
+        });
+      }
+    }
+    await db.insert(schema.scheduleTemplateSlots).values(slots);
+    return template;
+  }
+
+  await makeDefaultTemplate({
+    studioId: istanbul.id,
+    teachers: istTeachers,
+    classTypes: istClassTypes,
+    rooms: ["Studio"],
+    perDay: 3,
+    capacity: 8,
+    hourStart: 8,
+    hourSpacing: 4,
+  });
+
+  await makeDefaultTemplate({
+    studioId: uluwatu.id,
+    teachers: uluTeachers,
+    classTypes: uluClassTypes,
+    rooms: ["Shala 1", "Shala 2"],
+    perDay: 6,
+    capacity: 24,
+    hourStart: 7,
+    hourSpacing: 2,
   });
 
   console.log("Creating sign-ins for past sessions…");

@@ -11,12 +11,14 @@ import {
   formatTimeInZone,
   formatTimeValue,
 } from "@/lib/time";
+import { ensureWeekGenerated } from "@/lib/scheduleTemplates";
 import {
   createSessionAction,
   updateSessionAction,
   removeSessionAction,
   reinstateSessionAction,
   copyWeekAction,
+  applyTemplateAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -34,12 +36,17 @@ export default async function SchedulePage({
   const weekEnd = new Date(weekStart.getTime() + 7 * 86_400_000);
   const days = weekDays(weekStart);
 
+  // Lazily fill this week in from the studio's default template, if it's
+  // empty and one exists. A no-op most of the time (past/already-viewed
+  // weeks already have sessions).
+  await ensureWeekGenerated(studio, weekStart, weekEnd);
+
   const prevWeekKey = localDateKey(new Date(weekStart.getTime() - 7 * 86_400_000), studio.timezone);
   const nextWeekKey = localDateKey(new Date(weekStart.getTime() + 7 * 86_400_000), studio.timezone);
   const thisWeekKey = localDateKey(mondayOfWeek(studio.timezone), studio.timezone);
   const isCurrentWeek = localDateKey(weekStart, studio.timezone) === thisWeekKey;
 
-  const [sessions, teachers, classTypes] = await Promise.all([
+  const [sessions, teachers, classTypes, templates] = await Promise.all([
     db
       .select({
         id: schema.classSessions.id,
@@ -67,7 +74,14 @@ export default async function SchedulePage({
       .select()
       .from(schema.teachers)
       .where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.active, true))),
-    db.select().from(schema.classTypes).where(eq(schema.classTypes.studioId, studio.id)),
+    db
+      .select()
+      .from(schema.classTypes)
+      .where(and(eq(schema.classTypes.studioId, studio.id), eq(schema.classTypes.active, true))),
+    db
+      .select()
+      .from(schema.scheduleTemplates)
+      .where(eq(schema.scheduleTemplates.studioId, studio.id)),
   ]);
 
   const sessionsByDay = new Map<string, typeof sessions>();
@@ -106,13 +120,40 @@ export default async function SchedulePage({
               Copy last week in
             </button>
           </form>
+          {templates.length > 0 && (
+            <form action={applyTemplateAction} className="flex items-center gap-1.5">
+              <input type="hidden" name="studioId" value={studio.id} />
+              <input type="hidden" name="weekStart" value={weekStart.toISOString()} />
+              <select
+                name="templateId"
+                defaultValue={templates.find((t) => t.isDefault)?.id ?? templates[0].id}
+                className="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm text-stone-700"
+              >
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                    {t.isDefault ? " (default)" : ""}
+                  </option>
+                ))}
+              </select>
+              <button className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm text-stone-600 hover:bg-white">
+                Apply template
+              </button>
+            </form>
+          )}
+          <Link href="/templates" className="text-sm text-stone-500 hover:text-stone-900">
+            Manage templates
+          </Link>
         </div>
       </div>
 
       {teachers.length === 0 && (
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          No teachers on file for {studio.name} yet — add them directly in the database for now (a
-          proper "add teacher" screen is next on the list).
+          No teachers on file for {studio.name} yet —{" "}
+          <Link href="/team" className="underline">
+            add one on the Team page
+          </Link>
+          .
         </p>
       )}
 

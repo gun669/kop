@@ -12,15 +12,17 @@ const connectionString =
   process.env.POSTGRES_URL ||
   process.env.POSTGRES_PRISMA_URL ||
   process.env.DATABASE_URL_UNPOOLED ||
-  process.env.POSTGRES_URL_NON_POOLING;
+  process.env.POSTGRES_URL_NON_POOLING ||
+  "";
 
-if (!connectionString) {
-  throw new Error(
-    "No database connection string found. Set DATABASE_URL (or POSTGRES_URL) in your environment."
-  );
-}
-
-// A single shared connection pool for the app.
+// Deliberately not throwing here if connectionString is empty: this module
+// gets imported while Next.js is just analyzing the page structure at build
+// time — before a database is necessarily connected yet (e.g. the very
+// first deploy, before the Postgres integration is added). postgres.js
+// doesn't actually open a connection until a query runs, so an empty string
+// is safe here; a real error surfaces naturally, at request time, the
+// moment a page actually tries to read from the database with none
+// configured — which is when it should surface.
 const client = postgres(connectionString, { max: 10 });
 
 export const db = drizzle(client, { schema });

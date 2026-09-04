@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx src/db/seed.ts",
+    "db:seed": "tsx src/db/seed-cli.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

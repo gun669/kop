@@ -13,7 +13,11 @@ function toDateStr(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
-async function main() {
+// The actual seed logic, callable both from the CLI script below (`npm run
+// db:seed`) and from the one-time /api/setup route that runs this against
+// the live production database on first deploy (since this sandbox can't
+// open a direct connection to it — see /api/setup/route.ts for why).
+export async function seed() {
   console.log("Clearing existing data…");
   await db.delete(schema.signIns);
   await db.delete(schema.memberships);
@@ -371,10 +375,9 @@ async function main() {
   console.log(`  ${istReceptionist.email}   — Istanbul receptionist`);
   console.log(`  ${uluManager.email}  — Uluwatu manager`);
 
-  process.exit(0);
+  return {
+    istanbul: { teachers: istTeachers.length, guests: istGuests.length, sessions: istSessions.length, signIns: istSignInCount },
+    uluwatu: { teachers: uluTeachers.length, guests: uluGuests.length, sessions: uluSessions.length, signIns: uluSignInCount },
+    logins: [gun.email, istReceptionist.email, uluManager.email],
+  };
 }
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});

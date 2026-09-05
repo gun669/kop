@@ -35,6 +35,14 @@ export default async function ClassTypesPage() {
           <label className="block text-xs text-stone-500">Duration (minutes)</label>
           <input type="number" name="durationMinutes" defaultValue={60} min={15} step={5} className="w-28 rounded-lg border border-stone-300 px-3 py-2 text-sm" />
         </div>
+        <div>
+          <label className="block text-xs text-stone-500">Photo URL</label>
+          <input name="photoUrl" type="url" placeholder="https://…" className="w-56 rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+        </div>
+        <div className="w-full">
+          <label className="block text-xs text-stone-500">Description</label>
+          <input name="description" placeholder="A line or two guests will see" className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+        </div>
         <button className="rounded-lg bg-stone-900 px-3 py-2 text-sm font-medium text-white hover:bg-stone-800">
           Add class type
         </button>
@@ -51,6 +59,9 @@ export default async function ClassTypesPage() {
                 <span className="font-medium text-stone-800">{c.name}</span>{" "}
                 <span className="text-stone-500">· {c.durationMinutes} min</span>
                 {!c.active && <span className="ml-2 text-xs text-stone-400">inactive</span>}
+                {c.description && (
+                  <div className="pl-0 text-xs text-stone-400">{c.description}</div>
+                )}
               </summary>
               <div className="mt-3 space-y-2 rounded-lg bg-stone-50 p-3">
                 <form action={updateClassTypeAction} className="flex flex-wrap items-end gap-2">
@@ -63,6 +74,14 @@ export default async function ClassTypesPage() {
                   <div>
                     <label className="block text-xs text-stone-500">Duration (minutes)</label>
                     <input type="number" name="durationMinutes" defaultValue={c.durationMinutes} min={15} step={5} className="w-24 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-stone-500">Photo URL</label>
+                    <input name="photoUrl" type="url" defaultValue={c.photoUrl ?? ""} placeholder="https://…" className="w-48 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
+                  </div>
+                  <div className="w-full">
+                    <label className="block text-xs text-stone-500">Description</label>
+                    <input name="description" defaultValue={c.description ?? ""} className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
                   </div>
                   <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
                     Save changes

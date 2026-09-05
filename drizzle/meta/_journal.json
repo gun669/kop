@@ -15,6 +15,13 @@
       "when": 1788528710800,
       "tag": "0001_next_darkstar",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788606945490,
+      "tag": "0002_strong_havok",
+      "breakpoints": true
     }
   ]
 }

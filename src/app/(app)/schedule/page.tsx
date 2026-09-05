@@ -29,8 +29,25 @@ export default async function SchedulePage({
   searchParams: Promise<{ week?: string }>;
 }) {
   const { week } = await searchParams;
-  const { studio, role } = await requirePageContext();
-  requireRole(role, ["owner", "manager"]);
+  const { session, studio, role } = await requirePageContext();
+  requireRole(role, ["owner", "manager", "teacher"]);
+  const isManager = role === "owner" || role === "manager";
+
+  // A teacher only ever sees their own classes here, read-only — any change
+  // is a studio decision that goes through reception/manager. Resolve their
+  // teacher record once up front; if they don't have one yet (e.g. an
+  // account added with the teacher role but never linked on the Team
+  // page), they'll just see an empty schedule with a pointer to fix it.
+  const teacherRecord =
+    role === "teacher"
+      ? (
+          await db
+            .select()
+            .from(schema.teachers)
+            .where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.userId, session.userId)))
+            .limit(1)
+        )[0] ?? null
+      : null;
 
   const weekStart = parseWeekParam(week, studio.timezone);
   const weekEnd = new Date(weekStart.getTime() + 7 * 86_400_000);
@@ -38,8 +55,12 @@ export default async function SchedulePage({
 
   // Lazily fill this week in from the studio's default template, if it's
   // empty and one exists. A no-op most of the time (past/already-viewed
-  // weeks already have sessions).
-  await ensureWeekGenerated(studio, weekStart, weekEnd);
+  // weeks already have sessions). Only owner/manager views trigger this —
+  // a teacher just viewing their own week shouldn't populate the whole
+  // studio's schedule.
+  if (isManager) {
+    await ensureWeekGenerated(studio, weekStart, weekEnd);
+  }
 
   const prevWeekKey = localDateKey(new Date(weekStart.getTime() - 7 * 86_400_000), studio.timezone);
   const nextWeekKey = localDateKey(new Date(weekStart.getTime() + 7 * 86_400_000), studio.timezone);
@@ -66,7 +87,8 @@ export default async function SchedulePage({
         and(
           eq(schema.classSessions.studioId, studio.id),
           gte(schema.classSessions.startsAt, weekStart),
-          lt(schema.classSessions.startsAt, weekEnd)
+          lt(schema.classSessions.startsAt, weekEnd),
+          ...(role === "teacher" ? [eq(schema.classSessions.teacherId, teacherRecord?.id ?? -1)] : [])
         )
       )
       .orderBy(schema.classSessions.startsAt),
@@ -112,48 +134,58 @@ export default async function SchedulePage({
           <Link href={`/schedule?week=${nextWeekKey}`} className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm text-stone-600 hover:bg-white">
             Next week →
           </Link>
-          <form action={copyWeekAction}>
-            <input type="hidden" name="studioId" value={studio.id} />
-            <input type="hidden" name="fromWeekStart" value={new Date(weekStart.getTime() - 7 * 86_400_000).toISOString()} />
-            <input type="hidden" name="toWeekStart" value={weekStart.toISOString()} />
-            <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-800">
-              Copy last week in
-            </button>
-          </form>
-          {templates.length > 0 && (
-            <form action={applyTemplateAction} className="flex items-center gap-1.5">
-              <input type="hidden" name="studioId" value={studio.id} />
-              <input type="hidden" name="weekStart" value={weekStart.toISOString()} />
-              <select
-                name="templateId"
-                defaultValue={templates.find((t) => t.isDefault)?.id ?? templates[0].id}
-                className="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm text-stone-700"
-              >
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                    {t.isDefault ? " (default)" : ""}
-                  </option>
-                ))}
-              </select>
-              <button className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm text-stone-600 hover:bg-white">
-                Apply template
-              </button>
-            </form>
+          {isManager && (
+            <>
+              <form action={copyWeekAction}>
+                <input type="hidden" name="studioId" value={studio.id} />
+                <input type="hidden" name="fromWeekStart" value={new Date(weekStart.getTime() - 7 * 86_400_000).toISOString()} />
+                <input type="hidden" name="toWeekStart" value={weekStart.toISOString()} />
+                <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-800">
+                  Copy last week in
+                </button>
+              </form>
+              {templates.length > 0 && (
+                <form action={applyTemplateAction} className="flex items-center gap-1.5">
+                  <input type="hidden" name="studioId" value={studio.id} />
+                  <input type="hidden" name="weekStart" value={weekStart.toISOString()} />
+                  <select
+                    name="templateId"
+                    defaultValue={templates.find((t) => t.isDefault)?.id ?? templates[0].id}
+                    className="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm text-stone-700"
+                  >
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                        {t.isDefault ? " (default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm text-stone-600 hover:bg-white">
+                    Apply template
+                  </button>
+                </form>
+              )}
+              <Link href="/templates" className="text-sm text-stone-500 hover:text-stone-900">
+                Manage templates
+              </Link>
+            </>
           )}
-          <Link href="/templates" className="text-sm text-stone-500 hover:text-stone-900">
-            Manage templates
-          </Link>
         </div>
       </div>
 
-      {teachers.length === 0 && (
+      {isManager && teachers.length === 0 && (
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
           No teachers on file for {studio.name} yet —{" "}
           <Link href="/team" className="underline">
             add one on the Team page
           </Link>
           .
+        </p>
+      )}
+
+      {role === "teacher" && !teacherRecord && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Your account isn&apos;t linked to a teacher profile yet — ask a manager to add you on the Team page.
         </p>
       )}
 
@@ -170,108 +202,125 @@ export default async function SchedulePage({
                 {daySessions.length === 0 && (
                   <li className="px-4 py-3 text-sm text-stone-400">No classes.</li>
                 )}
-                {daySessions.map((s) => (
-                  <li key={s.id} className={`px-4 py-3 ${s.status === "cancelled" ? "opacity-50" : ""}`}>
-                    <details>
-                      <summary className="cursor-pointer text-sm">
-                        <span className="font-medium text-stone-800">{formatTimeInZone(s.startsAt, studio.timezone)}</span>{" "}
-                        <span className="text-stone-700">{s.classTypeName ?? "Class"}</span>
-                        {s.status === "cancelled" && <span className="ml-2 text-xs text-red-600">cancelled</span>}
-                        <div className="pl-0 text-xs text-stone-400">
-                          {s.teacherName ?? "TBA"} {s.room ? `· ${s.room}` : ""} · cap {s.capacity}
-                        </div>
-                      </summary>
+                {daySessions.map((s) =>
+                  isManager ? (
+                    <li key={s.id} className={`px-4 py-3 ${s.status === "cancelled" ? "opacity-50" : ""}`}>
+                      <details>
+                        <summary className="cursor-pointer text-sm">
+                          <span className="font-medium text-stone-800">{formatTimeInZone(s.startsAt, studio.timezone)}</span>{" "}
+                          <span className="text-stone-700">{s.classTypeName ?? "Class"}</span>
+                          {s.status === "cancelled" && <span className="ml-2 text-xs text-red-600">cancelled</span>}
+                          <div className="pl-0 text-xs text-stone-400">
+                            {s.teacherName ?? "TBA"} {s.room ? `· ${s.room}` : ""} · cap {s.capacity}
+                          </div>
+                        </summary>
 
-                      <div className="mt-3 space-y-2 rounded-lg bg-stone-50 p-3">
-                        {s.status === "cancelled" ? (
-                          <form action={reinstateSessionAction}>
-                            <input type="hidden" name="studioId" value={studio.id} />
-                            <input type="hidden" name="sessionId" value={s.id} />
-                            <button className="text-xs font-medium text-stone-700 hover:underline">
-                              Un-cancel this class
-                            </button>
-                          </form>
-                        ) : (
-                          <>
-                            <form action={updateSessionAction} className="space-y-2">
+                        <div className="mt-3 space-y-2 rounded-lg bg-stone-50 p-3">
+                          {s.status === "cancelled" ? (
+                            <form action={reinstateSessionAction}>
                               <input type="hidden" name="studioId" value={studio.id} />
                               <input type="hidden" name="sessionId" value={s.id} />
-                              <div className="flex gap-2">
-                                <input
-                                  type="date"
-                                  name="date"
-                                  defaultValue={key}
-                                  required
-                                  className="flex-1 rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
-                                />
-                                <input
-                                  type="time"
-                                  name="time"
-                                  defaultValue={formatTimeValue(s.startsAt, studio.timezone)}
-                                  required
-                                  className="w-28 rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
-                                />
-                              </div>
-                              <select name="teacherId" defaultValue={s.teacherId ?? ""} className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
-                                <option value="">No teacher assigned</option>
-                                {teachers.map((t) => (
-                                  <option key={t.id} value={t.id}>{t.name}</option>
-                                ))}
-                              </select>
-                              <select name="classTypeId" defaultValue={s.classTypeId ?? ""} className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
-                                <option value="">Class type</option>
-                                {classTypes.map((c) => (
-                                  <option key={c.id} value={c.id}>{c.name}</option>
-                                ))}
-                              </select>
-                              <div className="flex gap-2">
-                                <input name="room" defaultValue={s.room ?? ""} placeholder="Room / shala" className="flex-1 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
-                                <input type="number" name="capacity" defaultValue={s.capacity} min={1} className="w-20 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
-                              </div>
-                              <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
-                                Save changes
+                              <button className="text-xs font-medium text-stone-700 hover:underline">
+                                Un-cancel this class
                               </button>
                             </form>
-                            <form action={removeSessionAction}>
-                              <input type="hidden" name="studioId" value={studio.id} />
-                              <input type="hidden" name="sessionId" value={s.id} />
-                              <button className="text-xs text-red-600 hover:underline">Remove this class</button>
-                            </form>
-                          </>
-                        )}
+                          ) : (
+                            <>
+                              <form action={updateSessionAction} className="space-y-2">
+                                <input type="hidden" name="studioId" value={studio.id} />
+                                <input type="hidden" name="sessionId" value={s.id} />
+                                <div className="flex gap-2">
+                                  <input
+                                    type="date"
+                                    name="date"
+                                    defaultValue={key}
+                                    required
+                                    className="flex-1 rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
+                                  />
+                                  <input
+                                    type="time"
+                                    name="time"
+                                    defaultValue={formatTimeValue(s.startsAt, studio.timezone)}
+                                    required
+                                    className="w-28 rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
+                                  />
+                                </div>
+                                <select name="teacherId" defaultValue={s.teacherId ?? ""} className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
+                                  <option value="">No teacher assigned</option>
+                                  {teachers.map((t) => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                  ))}
+                                </select>
+                                <select name="classTypeId" defaultValue={s.classTypeId ?? ""} className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
+                                  <option value="">Class type</option>
+                                  {classTypes.map((c) => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                  ))}
+                                </select>
+                                <div className="flex gap-2">
+                                  <input name="room" defaultValue={s.room ?? ""} placeholder="Room / shala" className="flex-1 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
+                                  <input type="number" name="capacity" defaultValue={s.capacity} min={1} className="w-20 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
+                                </div>
+                                <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
+                                  Save changes
+                                </button>
+                              </form>
+                              <form action={removeSessionAction}>
+                                <input type="hidden" name="studioId" value={studio.id} />
+                                <input type="hidden" name="sessionId" value={s.id} />
+                                <button className="text-xs text-red-600 hover:underline">Remove this class</button>
+                              </form>
+                            </>
+                          )}
+                        </div>
+                      </details>
+                    </li>
+                  ) : (
+                    // Teachers get a read-only view of their own schedule —
+                    // any change (time, room, capacity, class type, or
+                    // cancelling) is a studio decision that goes through
+                    // reception/manager, not something they do here.
+                    <li key={s.id} className={`px-4 py-3 text-sm ${s.status === "cancelled" ? "opacity-50" : ""}`}>
+                      <span className="font-medium text-stone-800">{formatTimeInZone(s.startsAt, studio.timezone)}</span>{" "}
+                      <span className="text-stone-700">{s.classTypeName ?? "Class"}</span>
+                      {s.status === "cancelled" && <span className="ml-2 text-xs text-red-600">cancelled</span>}
+                      <div className="pl-0 text-xs text-stone-400">
+                        {s.room ? `${s.room} · ` : ""}cap {s.capacity}
                       </div>
-                    </details>
-                  </li>
-                ))}
+                    </li>
+                  )
+                )}
               </ul>
 
-              <details className="border-t border-stone-100 px-4 py-3">
-                <summary className="cursor-pointer text-sm text-stone-500">+ Add a class</summary>
-                <form action={createSessionAction} className="mt-2 space-y-2">
-                  <input type="hidden" name="studioId" value={studio.id} />
-                  <input type="hidden" name="date" value={key} />
-                  <input type="time" name="time" required defaultValue="09:00" className="w-28 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
-                  <select name="teacherId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
-                    <option value="">No teacher assigned</option>
-                    {teachers.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                  <select name="classTypeId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
-                    <option value="">Class type</option>
-                    {classTypes.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                  <div className="flex gap-2">
-                    <input name="room" placeholder="Room / shala" className="flex-1 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
-                    <input type="number" name="capacity" defaultValue={20} min={1} className="w-20 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
-                  </div>
-                  <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
-                    Add class
-                  </button>
-                </form>
-              </details>
+              {isManager && (
+                <details className="border-t border-stone-100 px-4 py-3">
+                  <summary className="cursor-pointer text-sm text-stone-500">+ Add a class</summary>
+                  <form action={createSessionAction} className="mt-2 space-y-2">
+                    <input type="hidden" name="studioId" value={studio.id} />
+                    <input type="hidden" name="date" value={key} />
+                    <input type="time" name="time" required defaultValue="09:00" className="w-28 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
+                    <select name="teacherId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
+                      <option value="">No teacher assigned</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                    <select name="classTypeId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
+                      <option value="">Class type</option>
+                      {classTypes.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <div className="flex gap-2">
+                      <input name="room" placeholder="Room / shala" className="flex-1 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
+                      <input type="number" name="capacity" defaultValue={20} min={1} className="w-20 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
+                    </div>
+                    <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
+                      Add class
+                    </button>
+                  </form>
+                </details>
+              )}
             </div>
           );
         })}

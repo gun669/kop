@@ -23,8 +23,10 @@ export async function createClassTypeAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return;
   const durationMinutes = Number(formData.get("durationMinutes")) || 60;
+  const description = String(formData.get("description") ?? "").trim() || null;
+  const photoUrl = String(formData.get("photoUrl") ?? "").trim() || null;
 
-  await db.insert(schema.classTypes).values({ studioId, name, durationMinutes });
+  await db.insert(schema.classTypes).values({ studioId, name, durationMinutes, description, photoUrl });
 
   revalidatePath("/class-types");
   revalidatePath("/schedule");
@@ -39,10 +41,12 @@ export async function updateClassTypeAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return;
   const durationMinutes = Number(formData.get("durationMinutes")) || 60;
+  const description = String(formData.get("description") ?? "").trim() || null;
+  const photoUrl = String(formData.get("photoUrl") ?? "").trim() || null;
 
   await db
     .update(schema.classTypes)
-    .set({ name, durationMinutes })
+    .set({ name, durationMinutes, description, photoUrl })
     .where(and(eq(schema.classTypes.id, classTypeId), eq(schema.classTypes.studioId, studioId)));
 
   revalidatePath("/class-types");

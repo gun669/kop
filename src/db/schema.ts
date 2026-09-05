@@ -101,6 +101,11 @@ export const teachers = pgTable("teachers", {
     .default("per_class"), // per_class | per_head | salary
   payRate: numeric("pay_rate", { precision: 10, scale: 2 }),
   active: boolean("active").notNull().default(true),
+  // Self-serve profile fields — a teacher edits these themselves once
+  // they're signed in (see /profile), rather than a manager typing bios
+  // in for them.
+  bio: text("bio"),
+  photoUrl: text("photo_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -128,6 +133,8 @@ export const classTypes = pgTable("class_types", {
   // Deactivated class types drop out of "add a class" pickers but stay
   // attached to any past sessions that already used them.
   active: boolean("active").notNull().default(true),
+  description: text("description"),
+  photoUrl: text("photo_url"),
 });
 
 export const classSessions = pgTable("class_sessions", {

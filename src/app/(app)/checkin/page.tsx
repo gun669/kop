@@ -18,8 +18,21 @@ export default async function CheckInPage({
 }) {
   const { session: sessionIdRaw, q } = await searchParams;
   const ctx = await requirePageContext();
-  requireRole(ctx.role, ["owner", "manager", "receptionist"]);
-  const { studio } = ctx;
+  requireRole(ctx.role, ["owner", "manager", "receptionist", "teacher"]);
+  const { studio, role, session: currentSession } = ctx;
+
+  // Teachers only see (and can only check in) their own classes — reception
+  // and management see everything on the schedule today.
+  const teacherRecord =
+    role === "teacher"
+      ? (
+          await db
+            .select()
+            .from(schema.teachers)
+            .where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.userId, currentSession.userId)))
+            .limit(1)
+        )[0] ?? null
+      : null;
 
   const { start, end } = todayRangeInTimeZone(studio.timezone);
 
@@ -39,7 +52,8 @@ export default async function CheckInPage({
       and(
         eq(schema.classSessions.studioId, studio.id),
         gte(schema.classSessions.startsAt, start),
-        lt(schema.classSessions.startsAt, end)
+        lt(schema.classSessions.startsAt, end),
+        ...(role === "teacher" ? [eq(schema.classSessions.teacherId, teacherRecord?.id ?? -1)] : [])
       )
     )
     .orderBy(schema.classSessions.startsAt);
@@ -95,6 +109,11 @@ export default async function CheckInPage({
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       <div className="lg:col-span-1">
         <h1 className="mb-3 text-lg font-semibold text-stone-900">Today at {studio.name}</h1>
+        {role === "teacher" && !teacherRecord && (
+          <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Your account isn&apos;t linked to a teacher profile yet — ask a manager to add you on the Team page.
+          </p>
+        )}
         <div className="space-y-2">
           {sessions.length === 0 && (
             <p className="text-sm text-stone-400">No classes scheduled today.</p>
@@ -152,6 +171,7 @@ export default async function CheckInPage({
                         <form action={setSignInStatusAction}>
                           <input type="hidden" name="studioId" value={studio.id} />
                           <input type="hidden" name="signInId" value={r.id} />
+                          <input type="hidden" name="classSessionId" value={selected.id} />
                           <input type="hidden" name="status" value="no_show" />
                           <button className="text-xs text-stone-400 hover:text-red-600">
                             mark no-show

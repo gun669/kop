@@ -1,4 +1,4 @@
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext } from "@/lib/context";
 import { todayRangeInTimeZone } from "@/lib/time";
@@ -15,46 +15,86 @@ function dateKey(d: Date | string) {
 }
 
 export default async function DashboardPage() {
-  const { studio } = await requirePageContext();
+  const { studio, role, session } = await requirePageContext();
+  // Owner/manager/receptionist keep seeing the full studio dashboard, same
+  // as before. Only a teacher gets scoped down to their own numbers —
+  // that's the one role this page was never actually gating.
+  const showStudioWideData = role !== "teacher";
 
   const { start: todayStart, end: todayEnd } = todayRangeInTimeZone(studio.timezone);
   const window14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
   const window30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  const [
-    classesToday,
-    signIns30,
-    revenue30,
-    expenses30,
-    teachers,
-    sessions30,
-  ] = await Promise.all([
+  // A teacher's dashboard shows only their own numbers — revenue, expenses,
+  // and other teachers' performance are studio-level data that stays with
+  // reception/management. Scoped at the query level (not just hidden in the
+  // UI) so a teacher's browser never even receives anyone else's figures.
+  const teacherRecord =
+    role === "teacher"
+      ? (
+          await db
+            .select()
+            .from(schema.teachers)
+            .where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.userId, session.userId)))
+            .limit(1)
+        )[0] ?? null
+      : null;
+
+  const sessionScope =
+    role === "teacher" ? [eq(schema.classSessions.teacherId, teacherRecord?.id ?? -1)] : [];
+
+  const [classesToday, sessions30, teachers] = await Promise.all([
     db
       .select()
       .from(schema.classSessions)
       .where(
         and(
           eq(schema.classSessions.studioId, studio.id),
-          gte(schema.classSessions.startsAt, todayStart)
+          gte(schema.classSessions.startsAt, todayStart),
+          ...sessionScope
         )
       ),
     db
       .select()
-      .from(schema.signIns)
-      .where(and(eq(schema.signIns.studioId, studio.id), gte(schema.signIns.checkedInAt, window30))),
-    db
-      .select()
-      .from(schema.revenueEntries)
-      .where(and(eq(schema.revenueEntries.studioId, studio.id), gte(schema.revenueEntries.occurredOn, dateKey(window30)))),
-    db
-      .select()
-      .from(schema.expenses)
-      .where(and(eq(schema.expenses.studioId, studio.id), gte(schema.expenses.occurredOn, dateKey(window30)))),
-    db.select().from(schema.teachers).where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.active, true))),
-    db
-      .select()
       .from(schema.classSessions)
-      .where(and(eq(schema.classSessions.studioId, studio.id), gte(schema.classSessions.startsAt, window30))),
+      .where(and(eq(schema.classSessions.studioId, studio.id), gte(schema.classSessions.startsAt, window30), ...sessionScope)),
+    showStudioWideData
+      ? db.select().from(schema.teachers).where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.active, true)))
+      : Promise.resolve([]),
+  ]);
+
+  const sessionIds30 = sessions30.map((s) => s.id);
+
+  const [signIns30, revenue30, expenses30] = await Promise.all([
+    role === "teacher"
+      ? sessionIds30.length > 0
+        ? db
+            .select()
+            .from(schema.signIns)
+            .where(
+              and(
+                eq(schema.signIns.studioId, studio.id),
+                gte(schema.signIns.checkedInAt, window30),
+                inArray(schema.signIns.classSessionId, sessionIds30)
+              )
+            )
+        : Promise.resolve([])
+      : db
+          .select()
+          .from(schema.signIns)
+          .where(and(eq(schema.signIns.studioId, studio.id), gte(schema.signIns.checkedInAt, window30))),
+    showStudioWideData
+      ? db
+          .select()
+          .from(schema.revenueEntries)
+          .where(and(eq(schema.revenueEntries.studioId, studio.id), gte(schema.revenueEntries.occurredOn, dateKey(window30))))
+      : Promise.resolve([]),
+    showStudioWideData
+      ? db
+          .select()
+          .from(schema.expenses)
+          .where(and(eq(schema.expenses.studioId, studio.id), gte(schema.expenses.occurredOn, dateKey(window30))))
+      : Promise.resolve([]),
   ]);
 
   const classesTodayCount = classesToday.filter(
@@ -129,61 +169,73 @@ export default async function DashboardPage() {
         <p className="text-sm text-stone-500">Last 30 days, unless noted</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className={`grid grid-cols-2 gap-3 ${showStudioWideData ? "md:grid-cols-5" : "md:grid-cols-3"}`}>
         <StatTile label="Classes today" value={String(classesTodayCount)} />
         <StatTile label="Attendance rate" value={attendanceRate !== null ? `${attendanceRate}%` : "–"} />
-        <StatTile label="Revenue" value={money(revenueSum, studio.currency)} tone="good" />
-        <StatTile label="Expenses" value={money(expenseSum, studio.currency)} tone="bad" />
-        <StatTile
-          label="Net"
-          value={money(revenueSum - expenseSum, studio.currency)}
-          tone={revenueSum - expenseSum >= 0 ? "good" : "bad"}
-        />
+        {showStudioWideData ? (
+          <>
+            <StatTile label="Revenue" value={money(revenueSum, studio.currency)} tone="good" />
+            <StatTile label="Expenses" value={money(expenseSum, studio.currency)} tone="bad" />
+            <StatTile
+              label="Net"
+              value={money(revenueSum - expenseSum, studio.currency)}
+              tone={revenueSum - expenseSum >= 0 ? "good" : "bad"}
+            />
+          </>
+        ) : (
+          <StatTile label="Classes taught (30d)" value={String(sessions30.length)} />
+        )}
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className={`grid grid-cols-1 gap-6 ${showStudioWideData ? "lg:grid-cols-2" : ""}`}>
         <div className="rounded-xl border border-stone-200 bg-white p-4">
-          <h2 className="mb-2 text-sm font-medium text-stone-700">Attendance, last 14 days</h2>
+          <h2 className="mb-2 text-sm font-medium text-stone-700">
+            {showStudioWideData ? "Attendance, last 14 days" : "Your attendance, last 14 days"}
+          </h2>
           <AttendanceTrendChart data={attendanceTrend} />
         </div>
-        <div className="rounded-xl border border-stone-200 bg-white p-4">
-          <h2 className="mb-2 text-sm font-medium text-stone-700">Revenue vs. expenses, last 14 days</h2>
-          <MoneyTrendChart data={moneyTrend} currency={studio.currency} />
-        </div>
+        {showStudioWideData && (
+          <div className="rounded-xl border border-stone-200 bg-white p-4">
+            <h2 className="mb-2 text-sm font-medium text-stone-700">Revenue vs. expenses, last 14 days</h2>
+            <MoneyTrendChart data={moneyTrend} currency={studio.currency} />
+          </div>
+        )}
       </div>
 
-      <div className="rounded-xl border border-stone-200 bg-white">
-        <div className="border-b border-stone-100 px-4 py-2 text-sm font-medium text-stone-700">
-          Teacher performance, last 30 days
+      {showStudioWideData && (
+        <div className="rounded-xl border border-stone-200 bg-white">
+          <div className="border-b border-stone-100 px-4 py-2 text-sm font-medium text-stone-700">
+            Teacher performance, last 30 days
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-stone-400">
+                <th className="px-4 py-2 font-medium">Teacher</th>
+                <th className="px-4 py-2 font-medium">Classes taught</th>
+                <th className="px-4 py-2 font-medium">Avg. attendance</th>
+                <th className="px-4 py-2 font-medium">No-show rate</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {teacherRows.map((t) => (
+                <tr key={t.id}>
+                  <td className="px-4 py-2 text-stone-800">{t.name}</td>
+                  <td className="px-4 py-2 text-stone-600">{t.classesTaught}</td>
+                  <td className="px-4 py-2 text-stone-600">{t.avgAttendance}</td>
+                  <td className="px-4 py-2 text-stone-600">{t.noShowRate}</td>
+                </tr>
+              ))}
+              {teacherRows.length === 0 && (
+                <tr>
+                  <td className="px-4 py-3 text-sm text-stone-400" colSpan={4}>
+                    No teachers yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-stone-400">
-              <th className="px-4 py-2 font-medium">Teacher</th>
-              <th className="px-4 py-2 font-medium">Classes taught</th>
-              <th className="px-4 py-2 font-medium">Avg. attendance</th>
-              <th className="px-4 py-2 font-medium">No-show rate</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-stone-100">
-            {teacherRows.map((t) => (
-              <tr key={t.id}>
-                <td className="px-4 py-2 text-stone-800">{t.name}</td>
-                <td className="px-4 py-2 text-stone-600">{t.classesTaught}</td>
-                <td className="px-4 py-2 text-stone-600">{t.avgAttendance}</td>
-                <td className="px-4 py-2 text-stone-600">{t.noShowRate}</td>
-              </tr>
-            ))}
-            {teacherRows.length === 0 && (
-              <tr>
-                <td className="px-4 py-3 text-sm text-stone-400" colSpan={4}>
-                  No teachers yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      )}
     </div>
   );
 }

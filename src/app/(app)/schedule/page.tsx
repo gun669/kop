@@ -189,6 +189,14 @@ export default async function SchedulePage({
         </p>
       )}
 
+      {role === "teacher" && teacherRecord && sessions.length === 0 && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          You don&apos;t have any classes assigned this week — this page only ever shows classes where
+          you&apos;re the assigned teacher. If you expect to see something here, ask a manager to assign
+          you to a class on the schedule.
+        </p>
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {days.map((day) => {
           const key = localDateKey(day, studio.timezone);

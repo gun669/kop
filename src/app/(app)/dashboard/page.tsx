@@ -164,11 +164,6 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* TEMPORARY DEBUG — remove once the teacher-scoping issue is diagnosed */}
-      <p className="rounded bg-yellow-100 px-2 py-1 font-mono text-[11px] text-yellow-900">
-        debug: role=&quot;{role}&quot; showStudioWideData={String(showStudioWideData)} email=
-        {session.email} studioId={studio.id} teacherRecordId={teacherRecord?.id ?? "null"}
-      </p>
       <div>
         <h1 className="text-lg font-semibold text-stone-900">{studio.name}</h1>
         <p className="text-sm text-stone-500">Last 30 days, unless noted</p>

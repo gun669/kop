@@ -42,6 +42,7 @@ export default async function AppLayout({
     { href: "/money", label: "Revenue & expenses", roles: ["owner", "manager"] },
     { href: "/team", label: "Team", roles: ["owner", "manager"] },
     { href: "/profile", label: "My profile", roles: ["teacher"] },
+    { href: "/account", label: "My account", roles: ["owner", "manager", "receptionist", "teacher"] },
   ];
 
   return (

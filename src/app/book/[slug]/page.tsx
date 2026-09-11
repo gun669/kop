@@ -127,7 +127,7 @@ export default async function PublicBookingPage({
       </header>
 
       {confirmedSession && (
-        <div className="mb-6 border border-[#8C3B28] bg-[#F3F0E8] px-4 py-3">
+        <div className="mb-6 rounded-xl border border-[#8C3B28] bg-[#F3F0E8] px-4 py-3">
           <p className="text-sm font-medium text-[#8C3B28]">You&apos;re booked!</p>
           <p className="mt-0.5 text-sm text-[#52504E]">
             {confirmedSession.classTypeName ?? "Class"} at{" "}
@@ -138,7 +138,7 @@ export default async function PublicBookingPage({
       )}
 
       {error && (
-        <div className="mb-6 border border-[#52504E]/30 bg-white px-4 py-3">
+        <div className="mb-6 rounded-xl border border-[#52504E]/30 bg-white px-4 py-3">
           <p className="text-sm text-[#52504E]">{ERROR_MESSAGES[error] ?? "Something went wrong — try again."}</p>
         </div>
       )}
@@ -155,7 +155,7 @@ export default async function PublicBookingPage({
             <a
               key={key}
               href={`/book/${slug}?day=${key}`}
-              className={`shrink-0 border px-3 py-2 text-sm transition-colors ${
+              className={`shrink-0 rounded-full border px-3.5 py-2 text-sm transition-colors ${
                 isSelected
                   ? "border-[#8C3B28] bg-[#8C3B28] text-white"
                   : "border-[#DDD5C7] bg-white text-[#52504E] hover:border-[#8C3B28]"
@@ -167,7 +167,7 @@ export default async function PublicBookingPage({
         })}
       </nav>
 
-      <div className="divide-y divide-[#DDD5C7] border border-[#DDD5C7] bg-white">
+      <div className="divide-y divide-[#DDD5C7] overflow-hidden rounded-2xl border border-[#DDD5C7] bg-white">
         {sessions.length === 0 && (
           <p className="px-4 py-6 text-sm text-[#52504E]">No classes scheduled for this day.</p>
         )}
@@ -203,12 +203,12 @@ export default async function PublicBookingPage({
                 </div>
 
                 {!isBookable ? (
-                  <span className="border border-[#DDD5C7] bg-[#DDD5C7] px-4 py-2 text-sm font-medium text-[#52504E]">
+                  <span className="rounded-lg border border-[#DDD5C7] bg-[#DDD5C7] px-4 py-2 text-sm font-medium text-[#52504E]">
                     {isPast ? "Closed" : "Full"}
                   </span>
                 ) : (
                   <details className="group">
-                    <summary className="cursor-pointer list-none border border-[#8C3B28] bg-[#8C3B28] px-4 py-2 text-sm font-medium text-white">
+                    <summary className="cursor-pointer list-none rounded-lg border border-[#8C3B28] bg-[#8C3B28] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7a3222]">
                       Reserve
                     </summary>
                     <form
@@ -222,16 +222,16 @@ export default async function PublicBookingPage({
                         name="name"
                         required
                         placeholder="Your name"
-                        className="w-full border border-[#DDD5C7] bg-white px-3 py-2 text-sm text-[#52504E] placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
+                        className="w-full rounded-lg border border-[#DDD5C7] bg-white px-3 py-2 text-sm text-[#52504E] placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
                       />
                       <input
                         name="phone"
                         type="tel"
                         required
                         placeholder="Phone number"
-                        className="w-full border border-[#DDD5C7] bg-white px-3 py-2 text-sm text-[#52504E] placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
+                        className="w-full rounded-lg border border-[#DDD5C7] bg-white px-3 py-2 text-sm text-[#52504E] placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
                       />
-                      <button className="w-full border border-[#8C3B28] bg-[#8C3B28] px-4 py-2 text-sm font-medium text-white hover:bg-[#7a3222]">
+                      <button className="w-full rounded-lg border border-[#8C3B28] bg-[#8C3B28] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7a3222]">
                         Confirm spot
                       </button>
                     </form>

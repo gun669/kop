@@ -45,59 +45,73 @@ export default async function AppLayout({
   ];
 
   return (
-    <div className="min-h-screen bg-stone-50">
+    <div className="min-h-screen overflow-x-hidden bg-stone-50">
       <header className="border-b border-stone-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-6">
-            <Link href="/dashboard" className="text-lg font-semibold tracking-tight text-stone-900">
+        {/* w-full + min-w-0 on the shrinking pieces below keep this row from
+            ever forcing the page wider than the viewport on mobile — see
+            the nav row's own overflow-x-auto for how the links stay
+            reachable without taking the whole page sideways with them. */}
+        <div className="mx-auto max-w-6xl px-4 py-3">
+          <div className="flex w-full items-center justify-between gap-3">
+            <Link
+              href="/dashboard"
+              className="shrink-0 text-lg font-semibold tracking-tight text-stone-900"
+            >
               KOP
             </Link>
-            <nav className="flex gap-4">
-              {navLinks
-                .filter((l) => l.roles.includes(role))
-                .map((l) => (
-                  <Link
-                    key={l.href}
-                    href={l.href}
-                    className="text-sm text-stone-600 hover:text-stone-900"
+
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              {studios.length > 1 ? (
+                <form action={switchStudioAction} className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+                  <select
+                    name="studioId"
+                    defaultValue={currentStudio.id}
+                    className="w-28 min-w-0 rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs text-stone-700 sm:w-auto sm:text-sm"
                   >
-                    {l.label}
-                  </Link>
-                ))}
-            </nav>
+                    {studios.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    className="shrink-0 rounded-lg border border-stone-300 px-2 py-1 text-xs text-stone-600 hover:bg-stone-50"
+                  >
+                    Go
+                  </button>
+                </form>
+              ) : (
+                <span className="hidden truncate text-sm text-stone-500 sm:inline">
+                  {currentStudio.name}
+                </span>
+              )}
+              <span className="hidden text-sm text-stone-400 md:inline">
+                {session.name} · {role}
+              </span>
+              <form action={logoutAction} className="shrink-0">
+                <button className="text-sm text-stone-500 hover:text-stone-900">Sign out</button>
+              </form>
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {studios.length > 1 ? (
-              <form action={switchStudioAction} className="flex items-center gap-2">
-                <select
-                  name="studioId"
-                  defaultValue={currentStudio.id}
-                  className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-sm text-stone-700"
+          {/* Nav scrolls sideways within its own strip when it doesn't fit —
+              the page itself never does. -mx-4/px-4 lets the scroll area
+              bleed to the screen edges while staying aligned with the
+              content above it. */}
+          <nav className="-mx-4 mt-2 flex gap-4 overflow-x-auto whitespace-nowrap px-4 pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:overflow-visible sm:whitespace-normal sm:px-0 [&::-webkit-scrollbar]:hidden">
+            {navLinks
+              .filter((l) => l.roles.includes(role))
+              .map((l) => (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className="shrink-0 text-sm text-stone-600 hover:text-stone-900"
                 >
-                  {studios.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  className="rounded-lg border border-stone-300 px-2 py-1 text-xs text-stone-600 hover:bg-stone-50"
-                >
-                  Switch
-                </button>
-              </form>
-            ) : (
-              <span className="text-sm text-stone-500">{currentStudio.name}</span>
-            )}
-            <span className="hidden text-sm text-stone-400 sm:inline">
-              {session.name} · {role}
-            </span>
-            <form action={logoutAction}>
-              <button className="text-sm text-stone-500 hover:text-stone-900">Sign out</button>
-            </form>
-          </div>
+                  {l.label}
+                </Link>
+              ))}
+          </nav>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>

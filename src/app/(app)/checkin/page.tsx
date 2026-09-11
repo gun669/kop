@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { and, eq, gte, lt, ilike, ne } from "drizzle-orm";
+import { and, eq, gte, lt, ilike, ne, or } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext, requireRole } from "@/lib/context";
 import { todayRangeInTimeZone, formatTimeInZone } from "@/lib/time";
+import { normalizePhone } from "@/lib/phone";
 import {
   checkInExistingGuestAction,
   quickAddAndCheckInAction,
@@ -82,12 +83,23 @@ export default async function CheckInPage({
     ids.forEach((r) => rosterGuestIds.add(r.guestId));
   }
 
+  // Phone is the safer, more precise match (see bug: guests keyed by phone,
+  // not name) — if the query has at least a few digits in it, treat it as a
+  // possible phone search too, alongside the always-on name search.
+  const qDigits = (q ?? "").replace(/\D/g, "");
   const searchResults =
     q && q.length >= 2
       ? await db
           .select()
           .from(schema.guests)
-          .where(and(eq(schema.guests.studioId, studio.id), ilike(schema.guests.name, `%${q}%`)))
+          .where(
+            and(
+              eq(schema.guests.studioId, studio.id),
+              qDigits.length >= 3
+                ? or(ilike(schema.guests.name, `%${q}%`), ilike(schema.guests.phone, `%${qDigits}%`))
+                : ilike(schema.guests.name, `%${q}%`)
+            )
+          )
           .limit(8)
       : [];
 
@@ -192,7 +204,7 @@ export default async function CheckInPage({
                   type="text"
                   name="q"
                   defaultValue={q ?? ""}
-                  placeholder="Search guest by name…"
+                  placeholder="Search guest by name or phone…"
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-stone-500 focus:outline-none"
                 />
               </form>
@@ -208,7 +220,10 @@ export default async function CheckInPage({
                     return (
                       <li key={g.id} className="flex items-center justify-between rounded-lg border border-stone-100 px-3 py-2">
                         <div>
-                          <div className="text-sm text-stone-800">{g.name}</div>
+                          <div className="text-sm text-stone-800">
+                            {g.name}
+                            {g.phone && <span className="ml-1.5 text-xs text-stone-400">{g.phone}</span>}
+                          </div>
                           {memberships.length > 0 && (
                             <div className="text-xs text-stone-400">
                               {memberships

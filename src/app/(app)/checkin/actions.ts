@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNotNull } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { getSession, getAccessibleStudios } from "@/lib/auth";
+import { normalizePhone } from "@/lib/phone";
 
 // Owner/manager/receptionist can check anyone into any class. A teacher can
 // only check students into a class they are assigned to teach — covering
@@ -89,17 +90,50 @@ export async function quickAddAndCheckInAction(formData: FormData) {
   if (!name) return;
 
   const { session } = await assertCanManageCheckIn(studioId, classSessionId);
+  const normalizedPhone = normalizePhone(phone);
 
   await db.transaction(async (tx) => {
-    const [guest] = await tx
-      .insert(schema.guests)
-      .values({ studioId, name, phone: phone || null })
-      .returning();
+    // Phone number is the real identity key here, not the name someone
+    // happens to type at the desk — so before creating a new guest, check
+    // whether this phone number already belongs to someone in this studio
+    // and reuse that record instead of splintering their history across
+    // two guest rows (see bug: "guests should be linked by phone number,
+    // not name"). Matching happens in JS against normalized numbers since
+    // phone is stored as free-text and can't be compared reliably in SQL.
+    let guestId: number;
+    if (normalizedPhone) {
+      const candidates = await tx
+        .select({ id: schema.guests.id, phone: schema.guests.phone })
+        .from(schema.guests)
+        .where(and(eq(schema.guests.studioId, studioId), isNotNull(schema.guests.phone)));
+      const existing = candidates.find((g) => normalizePhone(g.phone) === normalizedPhone);
+      guestId = existing ? existing.id : -1;
+    } else {
+      guestId = -1;
+    }
+
+    if (guestId === -1) {
+      const [guest] = await tx
+        .insert(schema.guests)
+        .values({ studioId, name, phone: phone || null })
+        .returning();
+      guestId = guest.id;
+    } else {
+      // Matched an existing guest by phone — if they're already on this
+      // class's roster (e.g. reception typed them in twice), don't create a
+      // second sign-in row for the same person/class.
+      const [already] = await tx
+        .select({ id: schema.signIns.id })
+        .from(schema.signIns)
+        .where(and(eq(schema.signIns.classSessionId, classSessionId), eq(schema.signIns.guestId, guestId)))
+        .limit(1);
+      if (already) return;
+    }
 
     await tx.insert(schema.signIns).values({
       studioId,
       classSessionId,
-      guestId: guest.id,
+      guestId,
       status: "attended",
       checkedInByUserId: session.userId,
     });

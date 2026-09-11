@@ -63,6 +63,21 @@ export async function checkInExistingGuestAction(formData: FormData) {
       checkedInByUserId: session.userId,
     });
 
+    // If this guest already booked a spot in this class ahead of time,
+    // checking them in converts that reservation to "attended" instead of
+    // leaving it stranded as a separate, disconnected record — see the
+    // bookings table (src/db/schema.ts) for why the two are kept apart.
+    await tx
+      .update(schema.bookings)
+      .set({ status: "attended" })
+      .where(
+        and(
+          eq(schema.bookings.classSessionId, classSessionId),
+          eq(schema.bookings.guestId, guestId),
+          eq(schema.bookings.status, "booked")
+        )
+      );
+
     if (membershipId) {
       const [m] = await tx
         .select()
@@ -137,6 +152,19 @@ export async function quickAddAndCheckInAction(formData: FormData) {
       status: "attended",
       checkedInByUserId: session.userId,
     });
+
+    // Same conversion as the existing-guest path above — a walk-in who'd
+    // already booked online shouldn't end up with a dangling reservation.
+    await tx
+      .update(schema.bookings)
+      .set({ status: "attended" })
+      .where(
+        and(
+          eq(schema.bookings.classSessionId, classSessionId),
+          eq(schema.bookings.guestId, guestId),
+          eq(schema.bookings.status, "booked")
+        )
+      );
   });
 
   revalidatePath("/checkin");

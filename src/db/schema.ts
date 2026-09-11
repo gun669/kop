@@ -45,6 +45,17 @@ export const revenueSourceEnum = pgEnum("revenue_source", [
   "other",
 ]);
 
+// A booking is a guest holding a spot for a class ahead of time — distinct
+// from signIns, which records someone physically checked in that day.
+// "attended" means check-in converted this reservation into an actual
+// sign-in; "cancelled" frees the spot back up without deleting the row (so
+// no-show history stays intact even if the guest cancels last-minute).
+export const bookingStatusEnum = pgEnum("booking_status", [
+  "booked",
+  "cancelled",
+  "attended",
+]);
+
 // ---------- Core tenant ----------
 export const studios = pgTable("studios", {
   id: serial("id").primaryKey(),
@@ -207,6 +218,41 @@ export const memberships = pgTable("memberships", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// ---------- Bookings / reservations ----------
+// Holds a guest's spot for a future class, made ahead of the class date
+// (self-booking, or staff booking on someone's behalf later). Kept
+// separate from signIns because "reserved a spot for Thursday" and
+// "physically checked in today" are different facts — conflating them
+// would make capacity counts wrong (a class could look empty right up
+// until the day of, when it's actually fully booked) and would erase the
+// "booked but never showed" signal that matters for no-show tracking.
+//
+// One row per (classSessionId, guestId): booking again after a
+// cancellation flips the existing row back to "booked" rather than
+// inserting a second one, so a guest can't accidentally hold two spots in
+// the same class.
+export const bookings = pgTable(
+  "bookings",
+  {
+    id: serial("id").primaryKey(),
+    studioId: integer("studio_id")
+      .notNull()
+      .references(() => studios.id, { onDelete: "cascade" }),
+    classSessionId: integer("class_session_id")
+      .notNull()
+      .references(() => classSessions.id, { onDelete: "cascade" }),
+    guestId: integer("guest_id")
+      .notNull()
+      .references(() => guests.id, { onDelete: "cascade" }),
+    status: bookingStatusEnum("status").notNull().default("booked"),
+    // Where the booking came from — today always "widget", but keeps room
+    // for staff-entered bookings later without a schema change.
+    source: varchar("source", { length: 20 }).notNull().default("widget"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("booking_session_guest_unique").on(t.classSessionId, t.guestId)]
+);
+
 // ---------- Sign-ins / attendance ----------
 export const signIns = pgTable("sign_ins", {
   id: serial("id").primaryKey(),
@@ -322,6 +368,15 @@ export const teachersRelations = relations(teachers, ({ one, many }) => ({
   classSessions: many(classSessions),
 }));
 
+export const bookingsRelations = relations(bookings, ({ one }) => ({
+  studio: one(studios, { fields: [bookings.studioId], references: [studios.id] }),
+  classSession: one(classSessions, {
+    fields: [bookings.classSessionId],
+    references: [classSessions.id],
+  }),
+  guest: one(guests, { fields: [bookings.guestId], references: [guests.id] }),
+}));
+
 export const classSessionsRelations = relations(
   classSessions,
   ({ one, many }) => ({
@@ -337,6 +392,7 @@ export const classSessionsRelations = relations(
       fields: [classSessions.classTypeId],
       references: [classTypes.id],
     }),
+    bookings: many(bookings),
     signIns: many(signIns),
   })
 );
@@ -345,6 +401,7 @@ export const guestsRelations = relations(guests, ({ one, many }) => ({
   studio: one(studios, { fields: [guests.studioId], references: [studios.id] }),
   memberships: many(memberships),
   signIns: many(signIns),
+  bookings: many(bookings),
 }));
 
 export const membershipsRelations = relations(memberships, ({ one }) => ({

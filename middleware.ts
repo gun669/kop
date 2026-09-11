@@ -3,7 +3,9 @@ import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
 const SESSION_COOKIE = "kop_session";
-const PUBLIC_PATHS = ["/login"];
+// /book is the guest-facing booking page (Launch Path p0a/p2/p3) — anyone
+// with the studio's link needs to reach it without a KOP staff login.
+const PUBLIC_PATHS = ["/login", "/book"];
 
 function secretKey() {
   return new TextEncoder().encode(process.env.SESSION_SECRET);

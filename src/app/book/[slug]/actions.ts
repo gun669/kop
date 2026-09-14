@@ -1,9 +1,13 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { bookGuestForSession } from "@/lib/booking";
+import { packageByKey } from "@/lib/packages";
+import { isIyzicoConfigured, initializeCheckoutForm } from "@/lib/iyzico";
+import { normalizePhone } from "@/lib/phone";
 
 // Public server action behind the guest-facing booking page — no session,
 // no studio-access check like the internal app has, since anyone with the
@@ -66,5 +70,88 @@ export async function bookSessionAction(formData: FormData) {
     redirect(backTo({ error: result.reason }));
   }
 
+  // Real Iyzico payment collection (Launch Path p4) — deliberately
+  // additive and fail-open: if Iyzico isn't configured (no live/sandbox
+  // credentials yet — see the build log), or this studio has no drop-in
+  // price set (STUDIO_PACKAGES in src/lib/packages.ts), or the call to
+  // Iyzico itself fails for any reason, the booking still succeeds and
+  // behaves exactly as it does today — pay at the studio. A guest's spot
+  // is never lost because a payment call had a problem. This is also why
+  // this whole block ships on its own branch rather than straight to
+  // main: until real sandbox credentials exist to actually exercise it,
+  // it's unverified against Iyzico's real API, even though it's inert
+  // (IYZICO_API_KEY unset) on every environment that currently runs.
+  let paymentRedirectUrl: string | null = null;
+  if (isIyzicoConfigured()) {
+    const dropIn = packageByKey(studio.slug, "drop_in");
+    if (dropIn) {
+      try {
+        const hdrs = await headers();
+        const origin = hdrs.get("origin") ?? `https://${hdrs.get("host")}`;
+        const conversationId = `booking-${result.bookingId}-${Date.now()}`;
+        const normalizedPhone = normalizePhone(phone) || "5000000000";
+
+        const init = await initializeCheckoutForm({
+          conversationId,
+          price: dropIn.price.toFixed(2),
+          currency: (studio.currency as "TRY" | "USD" | "EUR") ?? "TRY",
+          basketId: `booking-${result.bookingId}`,
+          callbackUrl: `${origin}/api/iyzico/callback`,
+          buyer: {
+            id: String(result.guestId),
+            name: name.split(" ")[0] || name,
+            surname: name.split(" ").slice(1).join(" ") || name,
+            email: `guest${result.guestId}@guests.${slug}.kop-booking.invalid`,
+            phone: normalizedPhone.startsWith("+") ? normalizedPhone : `+${normalizedPhone}`,
+            // Iyzico requires an identity number; real bookings today don't
+            // collect one from the guest, so this uses Iyzico's own
+            // documented placeholder for buyers without a TC number on
+            // file. Worth revisiting with Gün before this goes fully live.
+            identityNumber: "11111111111",
+            city: studio.city ?? "Istanbul",
+            country: "Turkey",
+            address: studio.city ?? "Istanbul",
+          },
+          basketItems: [
+            {
+              id: `session-${classSessionId}`,
+              name: dropIn.label,
+              category: "Class",
+              price: dropIn.price.toFixed(2),
+            },
+          ],
+        });
+
+        await db.insert(schema.payments).values({
+          studioId: studio.id,
+          guestId: result.guestId,
+          bookingId: result.bookingId,
+          purpose: "booking",
+          provider: "iyzico",
+          providerConversationId: conversationId,
+          providerToken: init.token ?? null,
+          amount: String(dropIn.price),
+          currency: studio.currency,
+          status: init.status === "success" ? "pending" : "failed",
+          rawResponse: JSON.stringify(init).slice(0, 8000),
+        });
+
+        if (init.status === "success" && init.paymentPageUrl) {
+          paymentRedirectUrl = init.paymentPageUrl;
+        }
+        // Iyzico rejected the initialize call itself (bad request, account
+        // issue, etc.) — fall through to the normal pay-at-studio
+        // confirmation rather than stranding the guest with an error.
+      } catch (err) {
+        // Deliberately caught here (not just left to bubble) so a real
+        // Iyzico/network failure never costs the guest their booking —
+        // redirect() itself is called outside this try/catch below, so
+        // it can never be accidentally swallowed by this catch.
+        console.error("Iyzico checkout initialize failed", err);
+      }
+    }
+  }
+
+  if (paymentRedirectUrl) redirect(paymentRedirectUrl);
   redirect(backTo({ confirmed: String(classSessionId) }));
 }

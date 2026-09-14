@@ -17,6 +17,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   session_not_found: "That class isn't available anymore — try another time.",
   unavailable: "That class isn't available anymore — try another time.",
   missing: "Please fill in your name and phone number.",
+  payment_failed: "Your spot is booked, but the card payment didn't go through — please pay at the studio.",
+  payment_not_found: "We couldn't find that payment — your spot may still be booked, please check at the studio.",
+  payment_missing_token: "Something went wrong confirming your payment — please pay at the studio.",
 };
 
 function dayLabel(date: Date, timeZone: string) {
@@ -37,10 +40,10 @@ export default async function PublicBookingPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ day?: string; confirmed?: string; error?: string }>;
+  searchParams: Promise<{ day?: string; confirmed?: string; error?: string; paid?: string }>;
 }) {
   const { slug } = await params;
-  const { day, confirmed, error } = await searchParams;
+  const { day, confirmed, error, paid } = await searchParams;
 
   const [studio] = await db
     .select()
@@ -128,7 +131,9 @@ export default async function PublicBookingPage({
 
       {confirmedSession && (
         <div className="mb-6 rounded-xl border border-[#8C3B28] bg-[#F3F0E8] px-4 py-3">
-          <p className="text-sm font-medium text-[#8C3B28]">You&apos;re booked!</p>
+          <p className="text-sm font-medium text-[#8C3B28]">
+            {paid === "1" ? "You're booked and paid!" : "You're booked!"}
+          </p>
           <p className="mt-0.5 text-sm text-[#52504E]">
             {confirmedSession.classTypeName ?? "Class"} at{" "}
             {formatTimeInZone(confirmedSession.startsAt, studio.timezone)}

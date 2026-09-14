@@ -5,6 +5,8 @@ import { eq, and, isNotNull } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { getSession, getAccessibleStudios } from "@/lib/auth";
 import { normalizePhone } from "@/lib/phone";
+import { packageByKey, addMonthsToDateString } from "@/lib/packages";
+import { localDateKey } from "@/lib/time";
 
 // Owner/manager/receptionist can check anyone into any class. A teacher can
 // only check students into a class they are assigned to teach — covering
@@ -41,6 +43,77 @@ async function assertCanManageCheckIn(studioId: number, classSessionId: number) 
   }
 
   throw new Error("Not allowed to check guests in");
+}
+
+// Selling a package is a front-desk/management action, not something a
+// teacher does — deliberately narrower than assertCanManageCheckIn (which
+// lets a teacher check in students for their own class), and doesn't need
+// a classSessionId since it isn't tied to any one class.
+async function assertCanSellMembership(studioId: number) {
+  const session = await getSession();
+  if (!session) throw new Error("Not signed in");
+  const studios = await getAccessibleStudios(session);
+  const studio = studios.find((s) => s.id === studioId);
+  if (!studio) throw new Error("No access to this studio");
+  if (!["owner", "manager", "receptionist"].includes(studio.role)) {
+    throw new Error("Not allowed to sell packages");
+  }
+  return { session, studio };
+}
+
+// Records a real package sale: creates the membership (so the guest can
+// actually use it to check in) and a matching revenue entry in the same
+// transaction (so /money and the dashboard reflect it too) — this is the
+// piece that was missing between "we can check people in" and "we can
+// actually run the studio's day-to-day sales through KOP." Price and
+// validity come from the studio's own package list (src/lib/packages.ts),
+// never from the submitted form, so a tampered request can't record an
+// arbitrary amount.
+export async function sellMembershipAction(formData: FormData) {
+  const studioId = Number(formData.get("studioId"));
+  const guestId = Number(formData.get("guestId"));
+  const packageKey = String(formData.get("packageKey") ?? "");
+
+  const { session, studio } = await assertCanSellMembership(studioId);
+
+  const pkg = packageByKey(studio.slug, packageKey);
+  if (!pkg) throw new Error("Unknown package");
+
+  const [guest] = await db
+    .select({ id: schema.guests.id })
+    .from(schema.guests)
+    .where(and(eq(schema.guests.id, guestId), eq(schema.guests.studioId, studioId)))
+    .limit(1);
+  if (!guest) throw new Error("Guest not found");
+
+  const startsOn = localDateKey(new Date(), studio.timezone);
+  const expiresOn = addMonthsToDateString(startsOn, pkg.validityMonths);
+
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.memberships).values({
+      studioId,
+      guestId,
+      type: pkg.type,
+      totalCredits: pkg.credits,
+      remainingCredits: pkg.credits,
+      startsOn,
+      expiresOn,
+    });
+
+    await tx.insert(schema.revenueEntries).values({
+      studioId,
+      source: pkg.type === "drop_in" ? "drop_in" : "membership_sale",
+      amount: String(pkg.price),
+      note: pkg.label,
+      guestId,
+      occurredOn: startsOn,
+      enteredByUserId: session.userId,
+    });
+  });
+
+  revalidatePath("/checkin");
+  revalidatePath("/money");
+  revalidatePath("/dashboard");
 }
 
 export async function checkInExistingGuestAction(formData: FormData) {

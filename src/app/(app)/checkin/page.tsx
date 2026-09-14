@@ -1,12 +1,13 @@
 import Link from "next/link";
-import { and, eq, gte, lt, ilike, ne, or } from "drizzle-orm";
+import { and, eq, gte, lt, ilike, or } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext, requireRole } from "@/lib/context";
-import { todayRangeInTimeZone, formatTimeInZone } from "@/lib/time";
-import { normalizePhone } from "@/lib/phone";
+import { todayRangeInTimeZone, formatTimeInZone, localDateKey } from "@/lib/time";
+import { packagesForStudio } from "@/lib/packages";
 import {
   checkInExistingGuestAction,
   quickAddAndCheckInAction,
+  sellMembershipAction,
   setSignInStatusAction,
 } from "./actions";
 
@@ -103,19 +104,29 @@ export default async function CheckInPage({
           .limit(8)
       : [];
 
+  const todayKey = localDateKey(new Date(), studio.timezone);
+
+  // Only memberships that could actually cover this visit — has a credit
+  // left (or is unlimited) and hasn't expired — get auto-attached to the
+  // "Check in" button below. Drop-ins are included here now that they're
+  // a real, sellable package (see sellMembershipAction): a drop-in bought
+  // ahead of time is just a 1-credit membership like any other.
   const membershipsByGuest = new Map<number, (typeof schema.memberships.$inferSelect)[]>();
   for (const g of searchResults) {
     const ms = await db
       .select()
       .from(schema.memberships)
-      .where(
-        and(
-          eq(schema.memberships.guestId, g.id),
-          ne(schema.memberships.type, "drop_in")
-        )
-      );
-    membershipsByGuest.set(g.id, ms);
+      .where(eq(schema.memberships.guestId, g.id));
+    const usable = ms.filter(
+      (m) =>
+        (m.remainingCredits === null || m.remainingCredits > 0) &&
+        (!m.expiresOn || m.expiresOn >= todayKey)
+    );
+    membershipsByGuest.set(g.id, usable);
   }
+
+  const packages = packagesForStudio(studio.slug);
+  const canSellPackages = ["owner", "manager", "receptionist"].includes(role);
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -236,21 +247,42 @@ export default async function CheckInPage({
                             </div>
                           )}
                         </div>
-                        {already ? (
-                          <span className="text-xs text-stone-400">already in</span>
-                        ) : (
-                          <form action={checkInExistingGuestAction}>
-                            <input type="hidden" name="studioId" value={studio.id} />
-                            <input type="hidden" name="classSessionId" value={selected.id} />
-                            <input type="hidden" name="guestId" value={g.id} />
-                            {memberships[0] && (
-                              <input type="hidden" name="membershipId" value={memberships[0].id} />
-                            )}
-                            <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
-                              Check in
-                            </button>
-                          </form>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {canSellPackages && packages.length > 0 && (
+                            <form action={sellMembershipAction} className="flex items-center gap-1">
+                              <input type="hidden" name="studioId" value={studio.id} />
+                              <input type="hidden" name="guestId" value={g.id} />
+                              <select
+                                name="packageKey"
+                                className="rounded-lg border border-stone-300 px-1.5 py-1.5 text-xs text-stone-600"
+                              >
+                                {packages.map((p) => (
+                                  <option key={p.key} value={p.key}>
+                                    {p.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <button className="rounded-lg border border-stone-300 px-2 py-1.5 text-xs text-stone-600 hover:bg-stone-50">
+                                Sell
+                              </button>
+                            </form>
+                          )}
+                          {already ? (
+                            <span className="text-xs text-stone-400">already in</span>
+                          ) : (
+                            <form action={checkInExistingGuestAction}>
+                              <input type="hidden" name="studioId" value={studio.id} />
+                              <input type="hidden" name="classSessionId" value={selected.id} />
+                              <input type="hidden" name="guestId" value={g.id} />
+                              {memberships[0] && (
+                                <input type="hidden" name="membershipId" value={memberships[0].id} />
+                              )}
+                              <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
+                                Check in
+                              </button>
+                            </form>
+                          )}
+                        </div>
                       </li>
                     );
                   })}

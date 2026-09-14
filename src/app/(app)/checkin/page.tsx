@@ -232,7 +232,9 @@ export default async function CheckInPage({
                       <li key={g.id} className="flex items-center justify-between rounded-lg border border-stone-100 px-3 py-2">
                         <div>
                           <div className="text-sm text-stone-800">
-                            {g.name}
+                            <Link href={`/guests/${g.id}`} className="hover:underline">
+                              {g.name}
+                            </Link>
                             {g.phone && <span className="ml-1.5 text-xs text-stone-400">{g.phone}</span>}
                           </div>
                           {memberships.length > 0 && (

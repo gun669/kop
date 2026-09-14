@@ -36,6 +36,7 @@ export default async function AppLayout({
   const navLinks = [
     { href: "/dashboard", label: "Dashboard", roles: ["owner", "manager", "receptionist", "teacher"] },
     { href: "/checkin", label: "Check-in", roles: ["owner", "manager", "receptionist", "teacher"] },
+    { href: "/guests", label: "Guests", roles: ["owner", "manager", "receptionist"] },
     { href: "/schedule", label: "Schedule", roles: ["owner", "manager", "teacher"] },
     { href: "/templates", label: "Templates", roles: ["owner", "manager"] },
     { href: "/class-types", label: "Class types", roles: ["owner", "manager"] },

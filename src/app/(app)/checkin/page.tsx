@@ -6,6 +6,7 @@ import { todayRangeInTimeZone, formatTimeInZone, localDateKey } from "@/lib/time
 import { packagesForStudio } from "@/lib/packages";
 import {
   checkInExistingGuestAction,
+  checkInWithNegativeOverrideAction,
   quickAddAndCheckInAction,
   sellMembershipAction,
   setSignInStatusAction,
@@ -112,6 +113,11 @@ export default async function CheckInPage({
   // a real, sellable package (see sellMembershipAction): a drop-in bought
   // ahead of time is just a 1-credit membership like any other.
   const membershipsByGuest = new Map<number, (typeof schema.memberships.$inferSelect)[]>();
+  // Exhausted (or already-negative) finite-credit packs — the private-
+  // lesson-pack-overage case (Launch Path b8). Surfaced separately from
+  // the usable list above so only owner/manager get the override control,
+  // not a second normal "Check in" path.
+  const overridableByGuest = new Map<number, (typeof schema.memberships.$inferSelect)[]>();
   for (const g of searchResults) {
     const ms = await db
       .select()
@@ -123,10 +129,16 @@ export default async function CheckInPage({
         (!m.expiresOn || m.expiresOn >= todayKey)
     );
     membershipsByGuest.set(g.id, usable);
+
+    const exhausted = ms
+      .filter((m) => m.remainingCredits !== null && m.remainingCredits <= 0)
+      .sort((a, b) => (b.startsOn > a.startsOn ? 1 : -1));
+    overridableByGuest.set(g.id, exhausted);
   }
 
   const packages = packagesForStudio(studio.slug);
   const canSellPackages = ["owner", "manager", "receptionist"].includes(role);
+  const canOverrideBalance = ["owner", "manager"].includes(role);
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -272,17 +284,36 @@ export default async function CheckInPage({
                           {already ? (
                             <span className="text-xs text-stone-400">already in</span>
                           ) : (
-                            <form action={checkInExistingGuestAction}>
-                              <input type="hidden" name="studioId" value={studio.id} />
-                              <input type="hidden" name="classSessionId" value={selected.id} />
-                              <input type="hidden" name="guestId" value={g.id} />
-                              {memberships[0] && (
-                                <input type="hidden" name="membershipId" value={memberships[0].id} />
-                              )}
-                              <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
-                                Check in
-                              </button>
-                            </form>
+                            <>
+                              <form action={checkInExistingGuestAction}>
+                                <input type="hidden" name="studioId" value={studio.id} />
+                                <input type="hidden" name="classSessionId" value={selected.id} />
+                                <input type="hidden" name="guestId" value={g.id} />
+                                {memberships[0] && (
+                                  <input type="hidden" name="membershipId" value={memberships[0].id} />
+                                )}
+                                <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
+                                  Check in
+                                </button>
+                              </form>
+                              {canOverrideBalance &&
+                                memberships.length === 0 &&
+                                (overridableByGuest.get(g.id) ?? [])[0] && (
+                                  <form action={checkInWithNegativeOverrideAction} title="Check in anyway — their pack has no credits left, this will take them negative">
+                                    <input type="hidden" name="studioId" value={studio.id} />
+                                    <input type="hidden" name="classSessionId" value={selected.id} />
+                                    <input type="hidden" name="guestId" value={g.id} />
+                                    <input
+                                      type="hidden"
+                                      name="membershipId"
+                                      value={(overridableByGuest.get(g.id) ?? [])[0].id}
+                                    />
+                                    <button className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100">
+                                      Check in (override, −credit)
+                                    </button>
+                                  </form>
+                                )}
+                            </>
                           )}
                         </div>
                       </li>

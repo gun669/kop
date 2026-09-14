@@ -55,6 +55,15 @@ export default async function GuestDetailPage({
   const activeMemberships = memberships.filter(isUsable);
   const pastMemberships = memberships.filter((m) => !isUsable(m));
 
+  // Launch Path b8: a negative remainingCredits means a manager overrode a
+  // check-in past zero (private-lesson pack overage) — surface it clearly
+  // rather than making staff track it on paper. Clears automatically the
+  // next time this guest buys a package (see sellMembershipAction).
+  const sessionsOwed = memberships.reduce(
+    (sum, m) => sum + (m.remainingCredits !== null && m.remainingCredits < 0 ? Math.abs(m.remainingCredits) : 0),
+    0
+  );
+
   const history = await db
     .select({
       id: schema.signIns.id,
@@ -106,6 +115,13 @@ export default async function GuestDetailPage({
           {money(String(totalSpent), studio.currency)} lifetime spend
         </p>
       </div>
+
+      {sessionsOwed > 0 && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Owes {sessionsOwed} session{sessionsOwed === 1 ? "" : "s"} — clears automatically on their
+          next package purchase.
+        </p>
+      )}
 
       {saved && (
         <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Saved.</p>

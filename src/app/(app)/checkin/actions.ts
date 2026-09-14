@@ -1,12 +1,28 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq, and, isNotNull } from "drizzle-orm";
+import { eq, and, isNotNull, lt } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { getSession, getAccessibleStudios } from "@/lib/auth";
 import { normalizePhone } from "@/lib/phone";
 import { packageByKey, addMonthsToDateString } from "@/lib/packages";
 import { localDateKey } from "@/lib/time";
+
+// A negative-balance override (Launch Path b8) is a deliberate manager
+// judgment call — letting a private-lesson guest's pack go below zero —
+// not a routine front-desk action, so it's gated tighter than ordinary
+// check-in (owner/manager only, no receptionist/teacher).
+async function assertCanOverrideBalance(studioId: number) {
+  const session = await getSession();
+  if (!session) throw new Error("Not signed in");
+  const studios = await getAccessibleStudios(session);
+  const studio = studios.find((s) => s.id === studioId);
+  if (!studio) throw new Error("No access to this studio");
+  if (!["owner", "manager"].includes(studio.role)) {
+    throw new Error("Only an owner or manager can issue a negative-balance override");
+  }
+  return { session, studio };
+}
 
 // Owner/manager/receptionist can check anyone into any class. A teacher can
 // only check students into a class they are assigned to teach — covering
@@ -90,12 +106,49 @@ export async function sellMembershipAction(formData: FormData) {
   const expiresOn = addMonthsToDateString(startsOn, pkg.validityMonths);
 
   await db.transaction(async (tx) => {
+    // Settle any outstanding negative balance (b8 — a manager previously
+    // overrode a check-in past zero, e.g. a private-lesson pack overage)
+    // against this new purchase, so the debt clears rather than sitting
+    // there forever: the old negative membership(s) reset to 0, and the
+    // new pack starts with fewer usable credits instead of its full
+    // advertised amount. totalCredits still records what was actually
+    // bought — only remainingCredits reflects the debt payoff — so the
+    // guest's package history stays honest about what they paid for.
+    // Unlimited packages (pkg.credits === null) have no credit currency to
+    // apply a debt against, so they're left untouched here.
+    let startingCredits = pkg.credits;
+    if (startingCredits !== null) {
+      const negativeMemberships = await tx
+        .select()
+        .from(schema.memberships)
+        .where(and(eq(schema.memberships.guestId, guestId), lt(schema.memberships.remainingCredits, 0)));
+
+      let toApply = Math.min(
+        startingCredits,
+        negativeMemberships.reduce((sum, m) => sum + Math.abs(m.remainingCredits ?? 0), 0)
+      );
+      for (const nm of negativeMemberships) {
+        if (toApply <= 0) break;
+        const debt = Math.abs(nm.remainingCredits ?? 0);
+        const pay = Math.min(debt, toApply);
+        await tx
+          .update(schema.memberships)
+          .set({ remainingCredits: (nm.remainingCredits ?? 0) + pay })
+          .where(eq(schema.memberships.id, nm.id));
+        toApply -= pay;
+      }
+      startingCredits -= Math.min(
+        startingCredits,
+        negativeMemberships.reduce((sum, m) => sum + Math.abs(m.remainingCredits ?? 0), 0)
+      );
+    }
+
     await tx.insert(schema.memberships).values({
       studioId,
       guestId,
       type: pkg.type,
       totalCredits: pkg.credits,
-      remainingCredits: pkg.credits,
+      remainingCredits: startingCredits,
       startsOn,
       expiresOn,
     });
@@ -167,6 +220,64 @@ export async function checkInExistingGuestAction(formData: FormData) {
   });
 
   revalidatePath("/checkin");
+}
+
+// Launch Path b8: lets an owner/manager check a guest in against a
+// membership that has no credits left (or is already negative) — the
+// private-lesson-pack-overage case Gün flagged — instead of that being
+// impossible in the app and tracked on paper somewhere instead. Unlike
+// checkInExistingGuestAction, this always decrements remainingCredits,
+// even past zero; a guest can never trigger this themselves (it isn't
+// exposed on the public /book page), only staff choosing it explicitly.
+export async function checkInWithNegativeOverrideAction(formData: FormData) {
+  const studioId = Number(formData.get("studioId"));
+  const classSessionId = Number(formData.get("classSessionId"));
+  const guestId = Number(formData.get("guestId"));
+  const membershipId = Number(formData.get("membershipId"));
+
+  const { session } = await assertCanOverrideBalance(studioId);
+  if (!membershipId) throw new Error("A membership is required for a negative-balance override");
+
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.signIns).values({
+      studioId,
+      classSessionId,
+      guestId,
+      membershipId,
+      status: "attended",
+      checkedInByUserId: session.userId,
+    });
+
+    await tx
+      .update(schema.bookings)
+      .set({ status: "attended" })
+      .where(
+        and(
+          eq(schema.bookings.classSessionId, classSessionId),
+          eq(schema.bookings.guestId, guestId),
+          eq(schema.bookings.status, "booked")
+        )
+      );
+
+    const [m] = await tx
+      .select()
+      .from(schema.memberships)
+      .where(and(eq(schema.memberships.id, membershipId), eq(schema.memberships.guestId, guestId)))
+      .limit(1);
+    if (!m) throw new Error("Membership not found");
+    if (m.remainingCredits === null) {
+      // Unlimited memberships have no credit count to override — nothing
+      // to do here (this path shouldn't normally be reachable for one).
+      return;
+    }
+    await tx
+      .update(schema.memberships)
+      .set({ remainingCredits: m.remainingCredits - 1 })
+      .where(eq(schema.memberships.id, membershipId));
+  });
+
+  revalidatePath("/checkin");
+  revalidatePath(`/guests/${guestId}`);
 }
 
 export async function quickAddAndCheckInAction(formData: FormData) {

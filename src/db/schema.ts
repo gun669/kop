@@ -10,6 +10,7 @@ import {
   date,
   pgEnum,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -54,6 +55,27 @@ export const bookingStatusEnum = pgEnum("booking_status", [
   "booked",
   "cancelled",
   "attended",
+]);
+
+// ---------- Accounts Payable (vendor bills, Launch Path b7) ----------
+export const billStatusEnum = pgEnum("bill_status", ["unpaid", "paid"]);
+export const billFrequencyEnum = pgEnum("bill_frequency", [
+  "weekly",
+  "monthly",
+  "quarterly",
+  "yearly",
+]);
+
+// ---------- Payments (Iyzico, Launch Path p4) ----------
+export const paymentStatusEnum = pgEnum("payment_status", [
+  "pending",
+  "success",
+  "failed",
+  "refunded",
+]);
+export const paymentPurposeEnum = pgEnum("payment_purpose", [
+  "booking",
+  "membership",
 ]);
 
 // ---------- Core tenant ----------
@@ -253,6 +275,96 @@ export const bookings = pgTable(
   (t) => [uniqueIndex("booking_session_guest_unique").on(t.classSessionId, t.guestId)]
 );
 
+// ---------- Vendor bills / Accounts Payable ----------
+// A bill the studio owes someone else — rent, utilities, insurance,
+// supplies, a teacher's payroll for a period, or a one-off (repairs,
+// equipment, construction). Deliberately its own table rather than just
+// another `expenses` row: an expense is money already spent, a vendor
+// bill is money *owed* — it needs a due date and an unpaid/paid state so
+// a manager can see what's due/past due before it's actually paid. When
+// marked paid, a matching `expenses` row is written too (see bills
+// actions), so /money and /reports still see the real cash outflow.
+//
+// Recurring bills use the lazy-generation pattern already established for
+// the weekly schedule (see schedule/page.tsx): rather than a cron job,
+// `ensureRecurringBillOccurrences` (src/lib/bills.ts) tops up each
+// recurring series with upcoming instances whenever the bills page is
+// viewed. `recurrenceSeriesId` points every generated instance back at
+// the original recurring bill (which has `recurrenceSeriesId = null`),
+// so "find the latest instance in this series" is a simple query.
+export const vendorBills = pgTable("vendor_bills", {
+  id: serial("id").primaryKey(),
+  studioId: integer("studio_id")
+    .notNull()
+    .references(() => studios.id, { onDelete: "cascade" }),
+  vendorName: varchar("vendor_name", { length: 120 }).notNull(),
+  // rent | utilities | insurance | supplies | teacher_pay | construction |
+  // repairs | equipment | other — free-ish text rather than an enum since
+  // Gün explicitly wants to add his own rows for things like "new
+  // construction" without a code change.
+  category: varchar("category", { length: 60 }).notNull().default("other"),
+  description: text("description"),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  dueDate: date("due_date").notNull(),
+  status: billStatusEnum("status").notNull().default("unpaid"),
+  paidOn: date("paid_on"),
+  isRecurring: boolean("is_recurring").notNull().default(false),
+  recurrenceFrequency: billFrequencyEnum("recurrence_frequency"),
+  recurrenceSeriesId: integer("recurrence_series_id").references(
+    (): AnyPgColumn => vendorBills.id,
+    { onDelete: "set null" }
+  ),
+  enteredByUserId: integer("entered_by_user_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ---------- Payments (Iyzico) ----------
+// One row per real payment attempt against Iyzico's Checkout Form API —
+// created "pending" the moment a guest is handed off to iyzico's hosted
+// payment page, then updated to success/failed once the callback is
+// verified server-side (never trust the callback body alone — see
+// src/lib/iyzico.ts). Exists independently of `bookings`/`memberships` so
+// a failed or abandoned payment attempt is still visible, not silently
+// lost.
+//
+// `settledManually`/`settledOn` exist for Launch Path b9 (card settlement
+// tracking): Gün confirmed Türkiye's settlement window isn't a fixed
+// number of days he can compute automatically (varies, and there's a
+// separate "get paid instantly" option that costs a percentage) — so this
+// stays a manual flag a manager sets once the money actually lands in the
+// bank, not an auto-computed date. The columns exist now so that manual
+// step has somewhere to write to when b9's UI gets built; nothing sets
+// them yet.
+export const payments = pgTable("payments", {
+  id: serial("id").primaryKey(),
+  studioId: integer("studio_id")
+    .notNull()
+    .references(() => studios.id, { onDelete: "cascade" }),
+  guestId: integer("guest_id").references(() => guests.id, {
+    onDelete: "set null",
+  }),
+  bookingId: integer("booking_id").references(() => bookings.id, {
+    onDelete: "set null",
+  }),
+  membershipId: integer("membership_id").references(() => memberships.id, {
+    onDelete: "set null",
+  }),
+  purpose: paymentPurposeEnum("purpose").notNull(),
+  provider: varchar("provider", { length: 30 }).notNull().default("iyzico"),
+  providerConversationId: varchar("provider_conversation_id", { length: 120 }),
+  providerToken: varchar("provider_token", { length: 120 }),
+  providerPaymentId: varchar("provider_payment_id", { length: 120 }),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 8 }).notNull(),
+  status: paymentStatusEnum("status").notNull().default("pending"),
+  settledManually: boolean("settled_manually").notNull().default(false),
+  settledOn: date("settled_on"),
+  rawResponse: text("raw_response"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // ---------- Sign-ins / attendance ----------
 export const signIns = pgTable("sign_ins", {
   id: serial("id").primaryKey(),
@@ -423,6 +535,26 @@ export const signInsRelations = relations(signIns, ({ one }) => ({
   guest: one(guests, { fields: [signIns.guestId], references: [guests.id] }),
   membership: one(memberships, {
     fields: [signIns.membershipId],
+    references: [memberships.id],
+  }),
+}));
+
+export const vendorBillsRelations = relations(vendorBills, ({ one }) => ({
+  studio: one(studios, {
+    fields: [vendorBills.studioId],
+    references: [studios.id],
+  }),
+}));
+
+export const paymentsRelations = relations(payments, ({ one }) => ({
+  studio: one(studios, { fields: [payments.studioId], references: [studios.id] }),
+  guest: one(guests, { fields: [payments.guestId], references: [guests.id] }),
+  booking: one(bookings, {
+    fields: [payments.bookingId],
+    references: [bookings.id],
+  }),
+  membership: one(memberships, {
+    fields: [payments.membershipId],
     references: [memberships.id],
   }),
 }));

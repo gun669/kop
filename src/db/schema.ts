@@ -55,6 +55,12 @@ export const bookingStatusEnum = pgEnum("booking_status", [
   "booked",
   "cancelled",
   "attended",
+  // A booking still "booked" 10 minutes after its class started, with no
+  // matching sign-in, is auto-reconciled to this on the next check-in page
+  // view (see src/lib/checkin-roster.ts) — the guest never showed up and
+  // never told anyone. Distinct from "cancelled" (guest or staff actively
+  // cancelled ahead of time) so the two read differently in reporting.
+  "no_show",
 ]);
 
 // ---------- Accounts Payable (vendor bills, Launch Path b7) ----------

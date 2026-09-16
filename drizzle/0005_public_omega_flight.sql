@@ -1,0 +1,1 @@
+ALTER TYPE "public"."booking_status" ADD VALUE 'no_show';

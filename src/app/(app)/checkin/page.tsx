@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { and, eq, gte, lt, ilike, or } from "drizzle-orm";
+import { and, eq, gte, lt, ilike, or, inArray } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext, requireRole } from "@/lib/context";
 import { todayRangeInTimeZone, formatTimeInZone, localDateKey } from "@/lib/time";
 import { packagesForStudio } from "@/lib/packages";
+import { reconcileNoShows, buildRoster, type RosterEntry } from "@/lib/checkin-roster";
 import {
   checkInExistingGuestAction,
   checkInWithNegativeOverrideAction,
@@ -11,6 +12,12 @@ import {
   sellMembershipAction,
   setSignInStatusAction,
 } from "./actions";
+
+const MEMBERSHIP_LABEL: Record<string, string> = {
+  drop_in: "drop-in",
+  class_pack: "class pack",
+  unlimited_monthly: "unlimited",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +43,11 @@ export default async function CheckInPage({
             .limit(1)
         )[0] ?? null
       : null;
+
+  // Auto-reconcile any booking whose class started >10 minutes ago and was
+  // never checked in — see src/lib/checkin-roster.ts. Cheap, idempotent,
+  // safe on every page view; per Gün's explicit spec (Sep 16, 2026).
+  await reconcileNoShows(studio.id);
 
   const { start, end } = todayRangeInTimeZone(studio.timezone);
 
@@ -64,26 +76,8 @@ export default async function CheckInPage({
   const selectedId = sessionIdRaw ? Number(sessionIdRaw) : sessions[0]?.id;
   const selected = sessions.find((s) => s.id === selectedId);
 
-  const roster = selected
-    ? await db
-        .select({
-          id: schema.signIns.id,
-          status: schema.signIns.status,
-          guestName: schema.guests.name,
-        })
-        .from(schema.signIns)
-        .innerJoin(schema.guests, eq(schema.signIns.guestId, schema.guests.id))
-        .where(eq(schema.signIns.classSessionId, selected.id))
-    : [];
-
-  const rosterGuestIds = new Set<number>();
-  if (selected) {
-    const ids = await db
-      .select({ guestId: schema.signIns.guestId })
-      .from(schema.signIns)
-      .where(eq(schema.signIns.classSessionId, selected.id));
-    ids.forEach((r) => rosterGuestIds.add(r.guestId));
-  }
+  const roster: RosterEntry[] = selected ? await buildRoster(selected.id) : [];
+  const rosterGuestIds = new Set(roster.map((r) => r.guestId));
 
   // Phone is the safer, more precise match (see bug: guests keyed by phone,
   // not name) — if the query has at least a few digits in it, treat it as a
@@ -112,28 +106,41 @@ export default async function CheckInPage({
   // "Check in" button below. Drop-ins are included here now that they're
   // a real, sellable package (see sellMembershipAction): a drop-in bought
   // ahead of time is just a 1-credit membership like any other.
+  //
+  // Needed for two groups of guests: search results (walk-in flow, as
+  // before) and "booked, not yet arrived" roster rows (so a guest who
+  // already booked online and shows up in person doesn't need to be
+  // re-searched by name — they're already right there in the roster,
+  // per Gün's "everyone on the same page" ask, Sep 16, 2026).
   const membershipsByGuest = new Map<number, (typeof schema.memberships.$inferSelect)[]>();
   // Exhausted (or already-negative) finite-credit packs — the private-
   // lesson-pack-overage case (Launch Path b8). Surfaced separately from
   // the usable list above so only owner/manager get the override control,
   // not a second normal "Check in" path.
   const overridableByGuest = new Map<number, (typeof schema.memberships.$inferSelect)[]>();
-  for (const g of searchResults) {
-    const ms = await db
+  const guestIdsNeedingMemberships = new Set<number>(searchResults.map((g) => g.id));
+  for (const r of roster) {
+    if (r.status === "booked") guestIdsNeedingMemberships.add(r.guestId);
+  }
+  if (guestIdsNeedingMemberships.size > 0) {
+    const allMemberships = await db
       .select()
       .from(schema.memberships)
-      .where(eq(schema.memberships.guestId, g.id));
-    const usable = ms.filter(
-      (m) =>
-        (m.remainingCredits === null || m.remainingCredits > 0) &&
-        (!m.expiresOn || m.expiresOn >= todayKey)
-    );
-    membershipsByGuest.set(g.id, usable);
+      .where(inArray(schema.memberships.guestId, Array.from(guestIdsNeedingMemberships)));
+    for (const guestId of guestIdsNeedingMemberships) {
+      const ms = allMemberships.filter((m) => m.guestId === guestId);
+      const usable = ms.filter(
+        (m) =>
+          (m.remainingCredits === null || m.remainingCredits > 0) &&
+          (!m.expiresOn || m.expiresOn >= todayKey)
+      );
+      membershipsByGuest.set(guestId, usable);
 
-    const exhausted = ms
-      .filter((m) => m.remainingCredits !== null && m.remainingCredits <= 0)
-      .sort((a, b) => (b.startsOn > a.startsOn ? 1 : -1));
-    overridableByGuest.set(g.id, exhausted);
+      const exhausted = ms
+        .filter((m) => m.remainingCredits !== null && m.remainingCredits <= 0)
+        .sort((a, b) => (b.startsOn > a.startsOn ? 1 : -1));
+      overridableByGuest.set(guestId, exhausted);
+    }
   }
 
   const packages = packagesForStudio(studio.slug);
@@ -186,36 +193,76 @@ export default async function CheckInPage({
               <p className="text-sm text-stone-500">
                 {selected.teacherName ?? "TBA"} {selected.room ? `· ${selected.room}` : ""} ·{" "}
                 {roster.filter((r) => r.status === "attended").length}/{selected.capacity} checked in
+                {roster.some((r) => r.status === "booked") &&
+                  ` · ${roster.filter((r) => r.status === "booked").length} not arrived yet`}
+                {roster.some((r) => r.status === "no_show") &&
+                  ` · ${roster.filter((r) => r.status === "no_show").length} no-show`}
               </p>
             </div>
 
             <div className="rounded-xl border border-stone-200 bg-white">
               <div className="border-b border-stone-100 px-4 py-2 text-sm font-medium text-stone-700">
-                Roster
+                Roster — everyone expected or here, booked and walk-in together
               </div>
               <ul className="divide-y divide-stone-100">
                 {roster.length === 0 && (
-                  <li className="px-4 py-3 text-sm text-stone-400">No one checked in yet.</li>
+                  <li className="px-4 py-3 text-sm text-stone-400">Nobody booked or checked in yet.</li>
                 )}
-                {roster.map((r) => (
-                  <li key={r.id} className="flex items-center justify-between px-4 py-2 text-sm">
-                    <span className="text-stone-800">{r.guestName}</span>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge status={r.status} />
-                      {r.status === "attended" && (
-                        <form action={setSignInStatusAction}>
-                          <input type="hidden" name="studioId" value={studio.id} />
-                          <input type="hidden" name="signInId" value={r.id} />
-                          <input type="hidden" name="classSessionId" value={selected.id} />
-                          <input type="hidden" name="status" value="no_show" />
-                          <button className="text-xs text-stone-400 hover:text-red-600">
-                            mark no-show
-                          </button>
-                        </form>
-                      )}
-                    </div>
-                  </li>
-                ))}
+                {roster.map((r) => {
+                  const guestMemberships = membershipsByGuest.get(r.guestId) ?? [];
+                  return (
+                    <li key={r.guestId} className="flex items-center justify-between gap-3 px-4 py-2 text-sm">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <Link href={`/guests/${r.guestId}`} className="truncate text-stone-800 hover:underline">
+                            {r.guestName}
+                          </Link>
+                          <span
+                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                              r.source === "online" ? "bg-blue-50 text-blue-600" : "bg-stone-100 text-stone-500"
+                            }`}
+                          >
+                            {r.source === "online" ? "booked online" : "walk-in"}
+                          </span>
+                        </div>
+                        {r.status === "attended" && (
+                          <div className="text-xs text-stone-400">
+                            {r.membershipType
+                              ? MEMBERSHIP_LABEL[r.membershipType] ?? r.membershipType
+                              : "no package on file — collect payment"}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <StatusBadge status={r.status} />
+                        {r.status === "booked" && (
+                          <form action={checkInExistingGuestAction}>
+                            <input type="hidden" name="studioId" value={studio.id} />
+                            <input type="hidden" name="classSessionId" value={selected.id} />
+                            <input type="hidden" name="guestId" value={r.guestId} />
+                            {guestMemberships[0] && (
+                              <input type="hidden" name="membershipId" value={guestMemberships[0].id} />
+                            )}
+                            <button className="rounded-lg bg-stone-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-stone-800">
+                              Check in
+                            </button>
+                          </form>
+                        )}
+                        {r.status === "attended" && r.signInId !== null && (
+                          <form action={setSignInStatusAction}>
+                            <input type="hidden" name="studioId" value={studio.id} />
+                            <input type="hidden" name="signInId" value={r.signInId} />
+                            <input type="hidden" name="classSessionId" value={selected.id} />
+                            <input type="hidden" name="status" value="no_show" />
+                            <button className="text-xs text-stone-400 hover:text-red-600">
+                              mark no-show
+                            </button>
+                          </form>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
 
@@ -282,7 +329,7 @@ export default async function CheckInPage({
                             </form>
                           )}
                           {already ? (
-                            <span className="text-xs text-stone-400">already in</span>
+                            <span className="text-xs text-stone-400">already in the roster above</span>
                           ) : (
                             <>
                               <form action={checkInExistingGuestAction}>
@@ -353,11 +400,13 @@ export default async function CheckInPage({
 
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
+    booked: "bg-sky-50 text-sky-700",
     attended: "bg-emerald-50 text-emerald-700",
     no_show: "bg-red-50 text-red-700",
     late_cancel: "bg-amber-50 text-amber-700",
   };
   const labels: Record<string, string> = {
+    booked: "not arrived yet",
     attended: "attended",
     no_show: "no-show",
     late_cancel: "late cancel",

@@ -58,11 +58,29 @@ function authHeader(uriPath: string, bodyJson: string) {
 async function iyzicoPost<T>(uriPath: string, body: Record<string, unknown>): Promise<T> {
   const bodyJson = JSON.stringify(body);
   const headers = authHeader(uriPath, bodyJson);
-  const res = await fetch(`${baseUrl()}${uriPath}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
-    body: bodyJson,
-  });
+  const url = `${baseUrl()}${uriPath}`;
+  const doFetch = () =>
+    fetch(url, {
+      method: "POST",
+      // Connection: close discourages reusing a pooled keep-alive socket,
+      // which is a common cause of a spurious ECONNRESET / "fetch failed"
+      // on a cold serverless function's first request to a host.
+      headers: { "Content-Type": "application/json", ...headers, Connection: "close" },
+      body: bodyJson,
+    });
+  // Observed Iyzico's sandbox host occasionally reset the connection
+  // (fetch failed / ECONNRESET) rather than returning a normal response.
+  // Retry once after a short pause before giving up -- worth one retry
+  // rather than immediately falling back to pay-at-studio on what may
+  // just be a transient network blip.
+  let res: Response;
+  try {
+    res = await doFetch();
+  } catch (err) {
+    console.error("Iyzico request failed, retrying once:", err);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    res = await doFetch();
+  }
   const json = (await res.json()) as T;
   return json;
 }

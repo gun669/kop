@@ -138,6 +138,17 @@ export async function bookSessionAction(formData: FormData) {
 
         if (init.status === "success" && init.paymentPageUrl) {
           paymentRedirectUrl = init.paymentPageUrl;
+        } else {
+          // TEMPORARY diagnostic logging (Sep 16, 2026) -- to see why a
+          // request that no longer ECONNRESETs still isn't producing a
+          // paymentPageUrl, without needing a data-reading endpoint.
+          // Remove once the Iyzico flow is confirmed working end to end.
+          console.error("Iyzico checkout initialize did not yield a paymentPageUrl", {
+            status: init.status,
+            errorCode: init.errorCode,
+            errorMessage: init.errorMessage,
+            hasToken: Boolean(init.token),
+          });
         }
         // Iyzico rejected the initialize call itself (bad request, account
         // issue, etc.) — fall through to the normal pay-at-studio

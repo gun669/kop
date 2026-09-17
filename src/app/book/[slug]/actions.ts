@@ -101,7 +101,12 @@ export async function bookSessionAction(formData: FormData) {
             id: String(result.guestId),
             name: name.split(" ")[0] || name,
             surname: name.split(" ").slice(1).join(" ") || name,
-            email: `guest${result.guestId}@guests.${slug}.kop-booking.invalid`,
+            // Iyzico's own validation rejects the RFC 2606 "never real"
+            // TLD (.invalid) as a malformed email -- found Sep 17, 2026
+            // via the diagnostic logging below (errorCode 5, "email is
+            // invalid"). A plain .com-shaped placeholder passes their
+            // format check; nothing ever actually sends mail here.
+            email: `guest${result.guestId}@guests.${slug}.kop-booking-placeholder.com`,
             phone: normalizedPhone.startsWith("+") ? normalizedPhone : `+${normalizedPhone}`,
             // Iyzico requires an identity number; real bookings today don't
             // collect one from the guest, so this uses Iyzico's own

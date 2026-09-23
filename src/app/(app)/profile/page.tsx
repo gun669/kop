@@ -1,9 +1,9 @@
 import { headers } from "next/headers";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext, requireRole } from "@/lib/context";
 import { generateIcsToken } from "@/lib/ics";
-import { updateOwnProfileAction } from "./actions";
+import { updateOwnProfileAction, createMyTeacherProfileAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -13,14 +13,44 @@ export default async function ProfilePage({
   searchParams: Promise<{ saved?: string }>;
 }) {
   const { saved } = await searchParams;
+  // Owner/manager/teacher can all reach this page now (not teacher-only) —
+  // an owner or manager who also teaches classes (e.g. Gün at Kula) needs
+  // their own bio/photo/ICS feed too, not just people with a "teacher"
+  // studio-member role.
   const { studio, role, session } = await requirePageContext();
-  requireRole(role, ["teacher"]);
+  requireRole(role, ["owner", "manager", "teacher"]);
 
   let [teacher] = await db
     .select()
     .from(schema.teachers)
     .where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.userId, session.userId)))
     .limit(1);
+
+  // Fallback for someone (typically an owner/manager) who already has a
+  // teachers row for this studio — because they teach classes and are
+  // assignable on the schedule — but that row was never linked to their
+  // login (it has no userId, e.g. it was seeded/added before they had an
+  // owner account, or added without going through "Add team member").
+  // Auto-link it by matching their session email against the teacher
+  // row's email, the same lazy "fix on first real use" pattern as the
+  // icsToken generation below, rather than requiring a manual DB fix.
+  if (!teacher && session.email) {
+    const [unlinked] = await db
+      .select()
+      .from(schema.teachers)
+      .where(
+        and(
+          eq(schema.teachers.studioId, studio.id),
+          isNull(schema.teachers.userId),
+          sql`lower(${schema.teachers.email}) = lower(${session.email})`
+        )
+      )
+      .limit(1);
+    if (unlinked) {
+      await db.update(schema.teachers).set({ userId: session.userId }).where(eq(schema.teachers.id, unlinked.id));
+      teacher = { ...unlinked, userId: session.userId };
+    }
+  }
 
   // Lazily issue this teacher's private calendar-feed token the first
   // time they open this page — same "generate on first real use, not
@@ -34,12 +64,27 @@ export default async function ProfilePage({
 
   if (!teacher) {
     return (
-      <div className="max-w-lg space-y-2">
+      <div className="max-w-lg space-y-3">
         <h1 className="text-lg font-semibold text-stone-900">My profile</h1>
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Your account isn&apos;t linked to a teacher profile at {studio.name} yet — ask a manager to add you
-          on the Team page.
-        </p>
+        {role === "owner" || role === "manager" ? (
+          <div className="space-y-3 rounded-lg bg-amber-50 px-3 py-3 text-sm text-amber-800">
+            <p>
+              You don&apos;t have a teacher profile at {studio.name} yet — that&apos;s separate from your{" "}
+              {role} access, and only needed if you also teach classes here.
+            </p>
+            <form action={createMyTeacherProfileAction}>
+              <input type="hidden" name="studioId" value={studio.id} />
+              <button className="rounded-lg bg-stone-900 px-3 py-2 text-sm font-medium text-white hover:bg-stone-800">
+                I teach here — create my teacher profile
+              </button>
+            </form>
+          </div>
+        ) : (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Your account isn&apos;t linked to a teacher profile at {studio.name} yet — ask a manager to add
+            you on the Team page.
+          </p>
+        )}
       </div>
     );
   }

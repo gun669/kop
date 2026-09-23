@@ -67,7 +67,10 @@ export default async function PublicBookingPage({
       capacity: schema.classSessions.capacity,
       classTypeName: schema.classTypes.name,
       durationMinutes: schema.classTypes.durationMinutes,
+      classDescription: schema.classTypes.description,
       teacherName: schema.teachers.name,
+      teacherBio: schema.teachers.bio,
+      teacherPhotoUrl: schema.teachers.photoUrl,
     })
     .from(schema.classSessions)
     .leftJoin(schema.classTypes, eq(schema.classSessions.classTypeId, schema.classTypes.id))
@@ -194,12 +197,38 @@ export default async function PublicBookingPage({
                   <p className="mt-0.5 text-base font-medium text-[#52504E]" style={{ fontFamily: displayFont }}>
                     {s.classTypeName ?? "Class"}
                   </p>
-                  <p className="mt-0.5 text-xs text-[#52504E]/70">
-                    {s.teacherName ?? "TBA"}
-                    {s.room ? ` · ${s.room}` : ""}
-                    {" · "}
-                    {isPast ? "Class started" : isFull ? "Full" : `${spotsLeft} spot${spotsLeft === 1 ? "" : "s"} left`}
-                  </p>
+                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-[#52504E]/70">
+                    {s.teacherPhotoUrl && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={s.teacherPhotoUrl}
+                        alt=""
+                        className="h-4 w-4 shrink-0 rounded-full object-cover"
+                      />
+                    )}
+                    <span>
+                      {s.teacherName ?? "TBA"}
+                      {s.room ? ` · ${s.room}` : ""}
+                      {" · "}
+                      {isPast ? "Class started" : isFull ? "Full" : `${spotsLeft} spot${spotsLeft === 1 ? "" : "s"} left`}
+                    </span>
+                  </div>
+                  {(s.classDescription || s.teacherBio) && (
+                    <details className="mt-1.5">
+                      <summary className="cursor-pointer text-xs text-[#8C3B28] underline underline-offset-2">
+                        More about this class
+                      </summary>
+                      <div className="mt-1.5 max-w-md space-y-1.5 text-xs leading-relaxed text-[#52504E]/80">
+                        {s.classDescription && <p>{s.classDescription}</p>}
+                        {s.teacherBio && (
+                          <p>
+                            <span className="font-medium text-[#52504E]">{s.teacherName}: </span>
+                            {s.teacherBio}
+                          </p>
+                        )}
+                      </div>
+                    </details>
+                  )}
                 </div>
 
                 {!isBookable ? (

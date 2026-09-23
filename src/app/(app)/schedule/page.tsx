@@ -17,7 +17,6 @@ import {
   updateSessionAction,
   removeSessionAction,
   reinstateSessionAction,
-  copyWeekAction,
   applyTemplateAction,
 } from "./actions";
 
@@ -136,14 +135,6 @@ export default async function SchedulePage({
           </Link>
           {isManager && (
             <>
-              <form action={copyWeekAction}>
-                <input type="hidden" name="studioId" value={studio.id} />
-                <input type="hidden" name="fromWeekStart" value={new Date(weekStart.getTime() - 7 * 86_400_000).toISOString()} />
-                <input type="hidden" name="toWeekStart" value={weekStart.toISOString()} />
-                <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-800">
-                  Copy last week in
-                </button>
-              </form>
               {templates.length > 0 && (
                 <form action={applyTemplateAction} className="flex items-center gap-1.5">
                   <input type="hidden" name="studioId" value={studio.id} />
@@ -306,17 +297,27 @@ export default async function SchedulePage({
                   <form action={createSessionAction} className="mt-2 space-y-2">
                     <input type="hidden" name="studioId" value={studio.id} />
                     <input type="hidden" name="date" value={key} />
+                    <select name="classTypeId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
+                      <option value="">Class type</option>
+                      {classTypes.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <fieldset className="flex gap-3 text-xs text-stone-600">
+                      <label className="flex items-center gap-1">
+                        <input type="radio" name="mode" value="one_time" defaultChecked />
+                        One-time
+                      </label>
+                      <label className="flex items-center gap-1">
+                        <input type="radio" name="mode" value="recurring" />
+                        Recurring (every week)
+                      </label>
+                    </fieldset>
                     <input type="time" name="time" required defaultValue="09:00" className="w-28 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
                     <select name="teacherId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
                       <option value="">No teacher assigned</option>
                       {teachers.map((t) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                    <select name="classTypeId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
-                      <option value="">Class type</option>
-                      {classTypes.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
                     <div className="flex gap-2">

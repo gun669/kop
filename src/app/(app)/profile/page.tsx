@@ -1,6 +1,8 @@
+import { headers } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext, requireRole } from "@/lib/context";
+import { generateIcsToken } from "@/lib/ics";
 import { updateOwnProfileAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -14,11 +16,21 @@ export default async function ProfilePage({
   const { studio, role, session } = await requirePageContext();
   requireRole(role, ["teacher"]);
 
-  const [teacher] = await db
+  let [teacher] = await db
     .select()
     .from(schema.teachers)
     .where(and(eq(schema.teachers.studioId, studio.id), eq(schema.teachers.userId, session.userId)))
     .limit(1);
+
+  // Lazily issue this teacher's private calendar-feed token the first
+  // time they open this page — same "generate on first real use, not
+  // ahead of time" pattern as the studio's default schedule template
+  // (see ensureWeekGenerated). Nothing reads or writes it anywhere else.
+  if (teacher && !teacher.icsToken) {
+    const icsToken = generateIcsToken();
+    await db.update(schema.teachers).set({ icsToken }).where(eq(schema.teachers.id, teacher.id));
+    teacher = { ...teacher, icsToken };
+  }
 
   if (!teacher) {
     return (
@@ -31,6 +43,10 @@ export default async function ProfilePage({
       </div>
     );
   }
+
+  const hdrs = await headers();
+  const origin = `${hdrs.get("x-forwarded-proto") ?? "https"}://${hdrs.get("host")}`;
+  const icsUrl = `${origin}/api/calendar/${teacher.icsToken}/feed.ics`;
 
   return (
     <div className="max-w-lg space-y-4">
@@ -91,6 +107,52 @@ export default async function ProfilePage({
           Save profile
         </button>
       </form>
+
+      <div className="space-y-2 rounded-xl border border-stone-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-stone-900">Your class calendar</h2>
+        <p className="text-xs text-stone-500">
+          Add this link to Google Calendar or Apple Calendar as a subscription and your classes at{" "}
+          {studio.name} show up there automatically — no more checking KOP separately, and it updates
+          itself whenever a class time changes or you get subbed in or out.
+        </p>
+        <p className="break-all rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-700">{icsUrl}</p>
+
+        <details className="text-xs text-stone-500">
+          <summary className="cursor-pointer font-medium text-stone-700">
+            How to add this (Google Calendar / Apple Calendar)
+          </summary>
+          <div className="mt-2 space-y-3">
+            <div>
+              <p className="font-medium text-stone-700">Google Calendar</p>
+              <ol className="ml-4 list-decimal space-y-0.5">
+                <li>On a computer, open Google Calendar and click the + next to &quot;Other calendars&quot;.</li>
+                <li>Choose &quot;From URL&quot;.</li>
+                <li>Paste the link above, then click &quot;Add calendar&quot;.</li>
+              </ol>
+            </div>
+            <div>
+              <p className="font-medium text-stone-700">Apple Calendar (Mac)</p>
+              <ol className="ml-4 list-decimal space-y-0.5">
+                <li>Open the Calendar app.</li>
+                <li>Choose File → New Calendar Subscription.</li>
+                <li>Paste the link above and click Subscribe.</li>
+              </ol>
+            </div>
+            <div>
+              <p className="font-medium text-stone-700">iPhone / iPad</p>
+              <ol className="ml-4 list-decimal space-y-0.5">
+                <li>Open Settings → Calendar → Accounts → Add Account → Other.</li>
+                <li>Choose &quot;Add Subscribed Calendar&quot; and paste the link above.</li>
+              </ol>
+            </div>
+            <p className="text-stone-400">
+              This link is private to you — don&apos;t share it, since anyone with it can see your class
+              schedule. Calendar apps re-check it on their own schedule (usually every few hours), so a
+              change on the studio&apos;s side shows up there without you doing anything.
+            </p>
+          </div>
+        </details>
+      </div>
     </div>
   );
 }

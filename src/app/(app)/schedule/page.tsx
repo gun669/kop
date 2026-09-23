@@ -65,6 +65,7 @@ export default async function SchedulePage({
   const nextWeekKey = localDateKey(new Date(weekStart.getTime() + 7 * 86_400_000), studio.timezone);
   const thisWeekKey = localDateKey(mondayOfWeek(studio.timezone), studio.timezone);
   const isCurrentWeek = localDateKey(weekStart, studio.timezone) === thisWeekKey;
+  const todayKey = localDateKey(new Date(), studio.timezone);
 
   const [sessions, teachers, classTypes, templates] = await Promise.all([
     db
@@ -188,14 +189,31 @@ export default async function SchedulePage({
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {/* A real calendar row — every day its own column, side by side, same
+          layout system as the guest-facing booking page (p7) so the two
+          don't diverge, plus the manager edit/add affordances underneath
+          that a guest never sees. Horizontally scrollable when the
+          viewport is narrower than 7 columns; stacks vertically on phones
+          since a manager typically needs the whole week, not just today. */}
+      <div className="space-y-4 sm:-mx-1 sm:flex sm:gap-3 sm:space-y-0 sm:overflow-x-auto sm:pb-2">
         {days.map((day) => {
           const key = localDateKey(day, studio.timezone);
           const daySessions = sessionsByDay.get(key) ?? [];
+          const isToday = key === todayKey;
           return (
-            <div key={key} className="rounded-xl border border-stone-200 bg-white">
-              <div className="border-b border-stone-100 px-4 py-2 text-sm font-medium text-stone-700">
+            <div
+              key={key}
+              className={`overflow-hidden rounded-xl border bg-white sm:w-80 sm:shrink-0 ${
+                isToday ? "border-stone-400" : "border-stone-200"
+              }`}
+            >
+              <div
+                className={`border-b px-4 py-2 text-sm font-medium ${
+                  isToday ? "border-stone-300 bg-stone-100 text-stone-900" : "border-stone-100 text-stone-700"
+                }`}
+              >
                 {formatDayLabel(day, studio.timezone)}
+                {isToday && <span className="ml-1.5 text-xs font-normal text-stone-500">Today</span>}
               </div>
               <ul className="divide-y divide-stone-100">
                 {daySessions.length === 0 && (

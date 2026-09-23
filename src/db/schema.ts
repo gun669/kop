@@ -145,6 +145,14 @@ export const teachers = pgTable("teachers", {
   // in for them.
   bio: text("bio"),
   photoUrl: text("photo_url"),
+  // Launch Path b15: a private token identifying this teacher's ICS
+  // calendar-subscription feed (src/app/api/calendar/[token].ics). Lazily
+  // generated the first time they open /profile and ask for their link —
+  // null until then. Deliberately not the same as any session/auth token:
+  // this one is meant to sit in a URL a calendar app polls unattended, so
+  // it carries no other privileges and reveals nothing but this teacher's
+  // own class times.
+  icsToken: varchar("ics_token", { length: 64 }).unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -548,6 +556,41 @@ export const signInsRelations = relations(signIns, ({ one }) => ({
 export const vendorBillsRelations = relations(vendorBills, ({ one }) => ({
   studio: one(studios, {
     fields: [vendorBills.studioId],
+    references: [studios.id],
+  }),
+}));
+
+// ---------- Report share links (Launch Path b14) ----------
+// A manager-generated, revocable link that renders a PDF of the P&L for a
+// fixed studio/period, with no KOP login required — so a report can be
+// handed to an accountant or a co-owner without giving them any actual
+// account access. Deliberately its own table rather than a query-param-
+// signed URL: a plain "revoked" flag here is what makes revocation a real,
+// immediate action ("this link doesn't work anymore") rather than
+// something that only stops working once a signature scheme's secret is
+// rotated for everyone at once.
+export const reportShareLinks = pgTable("report_share_links", {
+  id: serial("id").primaryKey(),
+  studioId: integer("studio_id")
+    .notNull()
+    .references(() => studios.id, { onDelete: "cascade" }),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  // Only "pnl" exists today (the Reports page's revenue & expenses
+  // section) — a varchar rather than an enum so a future report type
+  // doesn't need a migration to add here.
+  reportType: varchar("report_type", { length: 30 }).notNull().default("pnl"),
+  periodFrom: date("period_from").notNull(),
+  periodTo: date("period_to").notNull(),
+  revoked: boolean("revoked").notNull().default(false),
+  createdByUserId: integer("created_by_user_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const reportShareLinksRelations = relations(reportShareLinks, ({ one }) => ({
+  studio: one(studios, {
+    fields: [reportShareLinks.studioId],
     references: [studios.id],
   }),
 }));

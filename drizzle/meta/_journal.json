@@ -43,6 +43,13 @@
       "when": 1789540689189,
       "tag": "0005_public_omega_flight",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790163745802,
+      "tag": "0006_loud_mister_fear",
+      "breakpoints": true
     }
   ]
 }

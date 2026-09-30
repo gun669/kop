@@ -83,12 +83,20 @@ export default async function GuestsPage({
           </p>
         </div>
         {canImport && (
-          <Link
-            href="/guests/import"
-            className="shrink-0 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-600 hover:bg-stone-50"
-          >
-            Import from CSV
-          </Link>
+          <div className="flex shrink-0 gap-2">
+            <a
+              href={`/api/guests/export?studioId=${studio.id}`}
+              className="rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-600 hover:bg-stone-50"
+            >
+              Export to CSV
+            </a>
+            <Link
+              href="/guests/import"
+              className="rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-600 hover:bg-stone-50"
+            >
+              Import from CSV
+            </Link>
+          </div>
         )}
       </div>
 

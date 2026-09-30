@@ -169,6 +169,20 @@ export const guests = pgTable("guests", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// A temporary staging row for a guest-list CSV export (e.g. from Wix
+// Contacts) mid-import — holds the raw file just long enough for a manager
+// to map its columns and confirm, then gets deleted. Not a permanent guest
+// data source; see src/app/(app)/guests/import.
+export const guestImportBatches = pgTable("guest_import_batches", {
+  id: serial("id").primaryKey(),
+  studioId: integer("studio_id")
+    .notNull()
+    .references(() => studios.id, { onDelete: "cascade" }),
+  fileName: varchar("file_name", { length: 255 }),
+  csvText: text("csv_text").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // ---------- Class types & sessions ----------
 export const classTypes = pgTable("class_types", {
   id: serial("id").primaryKey(),

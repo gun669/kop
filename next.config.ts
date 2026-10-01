@@ -9,6 +9,17 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/setup": ["./drizzle/**/*"],
   },
+
+  // Next's default Server Actions body limit is 1MB — well under the 4MB
+  // the teacher-photo upload action means to allow (see profile/actions.ts).
+  // Without this, a file between ~1MB and 4MB never reaches that action's
+  // own size check at all; it's rejected earlier with a bare 500. Matches
+  // (just under) Vercel's own 4.5MB server-upload cap for Blob.
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "4.5mb",
+    },
+  },
 };
 
 export default nextConfig;

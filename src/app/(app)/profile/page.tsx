@@ -7,12 +7,18 @@ import { updateOwnProfileAction, createMyTeacherProfileAction } from "./actions"
 
 export const dynamic = "force-dynamic";
 
+const PHOTO_ERROR_MESSAGES: Record<string, string> = {
+  type: "That file type isn't supported — please use a JPEG, PNG, or WebP image.",
+  size: "That photo is too large — please use one under 4MB.",
+  upload: "Something went wrong uploading your photo, so it wasn't changed. Your bio was still saved — try the photo again.",
+};
+
 export default async function ProfilePage({
   searchParams,
 }: {
-  searchParams: Promise<{ saved?: string }>;
+  searchParams: Promise<{ saved?: string; photoError?: string }>;
 }) {
-  const { saved } = await searchParams;
+  const { saved, photoError } = await searchParams;
   // Owner/manager/teacher can all reach this page now (not teacher-only) —
   // an owner or manager who also teaches classes (e.g. Gün at Kula) needs
   // their own bio/photo/ICS feed too, not just people with a "teacher"
@@ -103,11 +109,20 @@ export default async function ProfilePage({
         </p>
       </div>
 
-      {saved && (
+      {saved && !photoError && (
         <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Saved.</p>
       )}
+      {photoError && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {PHOTO_ERROR_MESSAGES[photoError] ?? "Something went wrong with that photo — please try again."}
+        </p>
+      )}
 
-      <form action={updateOwnProfileAction} className="space-y-3 rounded-xl border border-stone-200 bg-white p-4">
+      <form
+        action={updateOwnProfileAction}
+        encType="multipart/form-data"
+        className="space-y-3 rounded-xl border border-stone-200 bg-white p-4"
+      >
         <input type="hidden" name="studioId" value={studio.id} />
 
         <div className="flex items-center gap-3">
@@ -127,14 +142,16 @@ export default async function ProfilePage({
         </div>
 
         <div>
-          <label className="block text-xs text-stone-500">Photo URL</label>
+          <label className="block text-xs text-stone-500">Photo</label>
           <input
-            name="photoUrl"
-            type="url"
-            defaultValue={teacher.photoUrl ?? ""}
-            placeholder="https://…"
-            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+            name="photo"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-2 file:py-1 file:text-xs file:font-medium file:text-stone-700"
           />
+          <p className="mt-1 text-xs text-stone-400">
+            JPEG, PNG, or WebP, up to 4MB. Leave this empty to keep your current photo.
+          </p>
         </div>
 
         <div>

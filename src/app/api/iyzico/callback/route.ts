@@ -1,11 +1,17 @@
-// Iyzico posts here (application/x-www-form-urlencoded, a `token` field)
-// once a guest finishes (or abandons) the hosted Checkout Form. This route
-// is under /api, so it's outside the auth middleware's matcher entirely —
-// see middleware.ts — and outside PUBLIC_PATHS is fine too since /api is
-// already excluded there.
+// Iyzico's own docs say this gets a POST with `token` as a form field once
+// a guest finishes (or abandons) the hosted Checkout Form. Real-world
+// testing (Oct 3, 2026 — Gün's first live sandbox payment, including the
+// 3-D Secure/OTP step) showed the actual redirect lands here as a GET with
+// `token` as a query param instead — three real requests, all GET, all
+// rejected with a 405 when this route only exported POST. Handling both is
+// the safe fix regardless of which shape actually shows up: the token is
+// the only thing either carries, and everything after that is identical
+// either way. This route is under /api, so it's outside the auth
+// middleware's matcher entirely — see middleware.ts — and outside
+// PUBLIC_PATHS is fine too since /api is already excluded there.
 //
-// Never trusts the callback body for payment status — it calls Iyzico's
-// own retrieve endpoint server-to-server to confirm what actually
+// Never trusts the callback for payment status either way — it calls
+// Iyzico's own retrieve endpoint server-to-server to confirm what actually
 // happened (see src/lib/iyzico.ts), same principle as bookSessionAction
 // re-verifying the class session from the database rather than the form.
 import { NextRequest, NextResponse } from "next/server";
@@ -15,10 +21,7 @@ import { retrieveCheckoutForm, checkoutFormWasSuccessful } from "@/lib/iyzico";
 import { addMonthsToDateString } from "@/lib/packages";
 import { localDateKey } from "@/lib/time";
 
-export async function POST(req: NextRequest) {
-  const form = await req.formData();
-  const token = String(form.get("token") ?? "");
-
+async function handleCallback(req: NextRequest, token: string) {
   if (!token) {
     return NextResponse.redirect(new URL("/book?error=payment_missing_token", req.url));
   }
@@ -116,4 +119,15 @@ export async function POST(req: NextRequest) {
   bookUrl.searchParams.set("paid", "1");
   if (booking) bookUrl.searchParams.set("confirmed", String(booking.classSessionId));
   return NextResponse.redirect(bookUrl);
+}
+
+export async function POST(req: NextRequest) {
+  const form = await req.formData();
+  const token = String(form.get("token") ?? "");
+  return handleCallback(req, token);
+}
+
+export async function GET(req: NextRequest) {
+  const token = req.nextUrl.searchParams.get("token") ?? "";
+  return handleCallback(req, token);
 }

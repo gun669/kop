@@ -96,7 +96,11 @@ export async function bookSessionAction(formData: FormData) {
           price: dropIn.price.toFixed(2),
           currency: (studio.currency as "TRY" | "USD" | "EUR") ?? "TRY",
           basketId: `booking-${result.bookingId}`,
-          callbackUrl: `${origin}/api/iyzico/callback`,
+          // Embedding conversationId in the path, not relying on Iyzico to
+          // echo the token back to us — see the callback route's own
+          // comment for why (Oct 3, 2026 sandbox test: Iyzico's real
+          // redirect carried no token anywhere, despite their docs).
+          callbackUrl: `${origin}/api/iyzico/callback/${conversationId}`,
           buyer: {
             id: String(result.guestId),
             name: name.split(" ")[0] || name,

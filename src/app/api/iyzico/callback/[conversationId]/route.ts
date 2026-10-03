@@ -1,14 +1,25 @@
 // Iyzico's own docs say this gets a POST with `token` as a form field once
 // a guest finishes (or abandons) the hosted Checkout Form. Real-world
 // testing (Oct 3, 2026 — Gün's first live sandbox payment, including the
-// 3-D Secure/OTP step) showed the actual redirect lands here as a GET with
-// `token` as a query param instead — three real requests, all GET, all
-// rejected with a 405 when this route only exported POST. Handling both is
-// the safe fix regardless of which shape actually shows up: the token is
-// the only thing either carries, and everything after that is identical
-// either way. This route is under /api, so it's outside the auth
-// middleware's matcher entirely — see middleware.ts — and outside
-// PUBLIC_PATHS is fine too since /api is already excluded there.
+// 3-D Secure/OTP step) showed two problems with trusting that: (1) the
+// actual redirect landed as a GET, not a POST (fixed by handling both —
+// see the git history on this file); and (2) even after that fix, the real
+// redirect carried no token anywhere — not a query param, not a form
+// field. Iyzico's docs don't match Iyzico's actual sandbox behavior here.
+//
+// The robust fix (confirmed against a real third-party Iyzico integration
+// example, since Iyzico's own docs can't be trusted for this): never rely
+// on Iyzico echoing the token back at all. We already know our own token
+// — we saved it to the payments row at initializeCheckoutForm() time (see
+// bookSessionAction in src/app/book/[slug]/actions.ts). So instead this
+// route is keyed by conversationId, embedded directly in the callbackUrl's
+// path segment we handed to Iyzico, and we look up the already-known
+// token ourselves — regardless of what the callback request's method or
+// body actually looks like.
+//
+// This route is under /api, so it's outside the auth middleware's matcher
+// entirely — see middleware.ts — and outside PUBLIC_PATHS is fine too
+// since /api is already excluded there.
 //
 // Never trusts the callback for payment status either way — it calls
 // Iyzico's own retrieve endpoint server-to-server to confirm what actually
@@ -21,18 +32,22 @@ import { retrieveCheckoutForm, checkoutFormWasSuccessful } from "@/lib/iyzico";
 import { addMonthsToDateString } from "@/lib/packages";
 import { localDateKey } from "@/lib/time";
 
-async function handleCallback(req: NextRequest, token: string) {
-  if (!token) {
+async function handleCallback(req: NextRequest, conversationId: string) {
+  // No slug known yet at this point — if conversationId itself is missing
+  // or we can't find a payment for it, there's nothing to key a
+  // /book/[slug] redirect off, so these two early-outs fall back to the
+  // slug-less /book page (see src/app/book/page.tsx) rather than 404ing.
+  if (!conversationId) {
     return NextResponse.redirect(new URL("/book?error=payment_missing_token", req.url));
   }
 
   const [payment] = await db
     .select()
     .from(schema.payments)
-    .where(eq(schema.payments.providerToken, token))
+    .where(eq(schema.payments.providerConversationId, conversationId))
     .limit(1);
 
-  if (!payment) {
+  if (!payment || !payment.providerToken) {
     return NextResponse.redirect(new URL("/book?error=payment_not_found", req.url));
   }
 
@@ -45,7 +60,9 @@ async function handleCallback(req: NextRequest, token: string) {
     return NextResponse.redirect(new URL("/book?error=payment_not_found", req.url));
   }
 
-  const result = await retrieveCheckoutForm(token, payment.providerConversationId ?? undefined);
+  // Use the token we already saved at initialize time — never depend on
+  // Iyzico sending it back to us in the callback.
+  const result = await retrieveCheckoutForm(payment.providerToken, conversationId);
   const success = checkoutFormWasSuccessful(result);
 
   await db
@@ -121,13 +138,12 @@ async function handleCallback(req: NextRequest, token: string) {
   return NextResponse.redirect(bookUrl);
 }
 
-export async function POST(req: NextRequest) {
-  const form = await req.formData();
-  const token = String(form.get("token") ?? "");
-  return handleCallback(req, token);
+export async function POST(req: NextRequest, { params }: { params: Promise<{ conversationId: string }> }) {
+  const { conversationId } = await params;
+  return handleCallback(req, conversationId);
 }
 
-export async function GET(req: NextRequest) {
-  const token = req.nextUrl.searchParams.get("token") ?? "";
-  return handleCallback(req, token);
+export async function GET(req: NextRequest, { params }: { params: Promise<{ conversationId: string }> }) {
+  const { conversationId } = await params;
+  return handleCallback(req, conversationId);
 }

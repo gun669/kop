@@ -32,12 +32,14 @@ export async function GET(req: Request) {
     .where(eq(schema.guests.studioId, studioId))
     .orderBy(schema.guests.name);
 
-  const header = ["Name", "Phone", "Email", "Notes", "Guest since"];
+  const header = ["Name", "Phone", "Email", "Notes", "Source", "Member since", "Guest since"];
   const rows = guests.map((g) => [
     g.name,
     g.phone ?? "",
     g.email ?? "",
     g.notes ?? "",
+    g.source ?? "",
+    g.memberSince ?? "",
     g.createdAt.toISOString().slice(0, 10),
   ]);
   const csv = [header, ...rows].map((r) => r.map(csvEscape).join(",")).join("\r\n") + "\r\n";

@@ -61,6 +61,8 @@ export type GuestColumnMapping = {
   phoneCol: string | null;
   emailCol: string | null;
   notesCol: string | null;
+  sourceCol: string | null;
+  memberSinceCol: string | null;
 };
 
 function findHeader(headers: string[], candidates: string[]): string | null {
@@ -91,7 +93,33 @@ export function autoDetectGuestMapping(headers: string[]): GuestColumnMapping {
   ]);
   const emailCol = findHeader(headers, ["email", "e-mail", "email address"]);
   const notesCol = findHeader(headers, ["notes", "note", "tags", "labels"]);
-  return { nameCol, firstNameCol, lastNameCol, phoneCol, emailCol, notesCol };
+  const sourceCol = findHeader(headers, ["source", "lead source", "acquisition source", "channel"]);
+  const memberSinceCol = findHeader(headers, [
+    "member since",
+    "member_since",
+    "joined",
+    "join date",
+    "created",
+    "created date",
+    "signup date",
+  ]);
+  return { nameCol, firstNameCol, lastNameCol, phoneCol, emailCol, notesCol, sourceCol, memberSinceCol };
+}
+
+// Best-effort parse of a CSV date cell into "YYYY-MM-DD". Accepts the
+// unambiguous ISO form and the common "M/D/YYYY" (Wix/US spreadsheet)
+// form. Returns null rather than guessing on anything else — a bad/blank
+// memberSince is far less harmful than a silently wrong one.
+export function parseDateCell(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const m = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const [, mo, d, y] = m;
+    return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  return null;
 }
 
 export function resolveName(

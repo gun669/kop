@@ -22,6 +22,8 @@ const FIELD_LABELS: { key: keyof GuestColumnMapping; label: string; help?: strin
   { key: "phoneCol", label: "Phone column" },
   { key: "emailCol", label: "Email column" },
   { key: "notesCol", label: "Notes / tags column" },
+  { key: "sourceCol", label: "Source column", help: "e.g. Instagram, Referral, Walk-in — optional" },
+  { key: "memberSinceCol", label: "Member since column", help: "optional; only ISO (2026-01-15) or M/D/YYYY dates are recognized" },
 ];
 
 function ColumnSelect({
@@ -78,6 +80,8 @@ export default async function GuestImportPreviewPage({
     phoneCol: sp.phoneCol !== undefined ? sp.phoneCol || null : detected.phoneCol,
     emailCol: sp.emailCol !== undefined ? sp.emailCol || null : detected.emailCol,
     notesCol: sp.notesCol !== undefined ? sp.notesCol || null : detected.notesCol,
+    sourceCol: sp.sourceCol !== undefined ? sp.sourceCol || null : detected.sourceCol,
+    memberSinceCol: sp.memberSinceCol !== undefined ? sp.memberSinceCol || null : detected.memberSinceCol,
   };
 
   const existing = await db
@@ -199,6 +203,8 @@ export default async function GuestImportPreviewPage({
           <input type="hidden" name="phoneCol" value={mapping.phoneCol ?? ""} />
           <input type="hidden" name="emailCol" value={mapping.emailCol ?? ""} />
           <input type="hidden" name="notesCol" value={mapping.notesCol ?? ""} />
+          <input type="hidden" name="sourceCol" value={mapping.sourceCol ?? ""} />
+          <input type="hidden" name="memberSinceCol" value={mapping.memberSinceCol ?? ""} />
           <button className="rounded-lg bg-stone-900 px-3 py-2 text-sm font-medium text-white hover:bg-stone-800">
             Confirm import — add {counts.new}, update {counts.update}
           </button>

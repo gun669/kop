@@ -6,7 +6,7 @@ import { eq, and, isNotNull } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { getSession, getAccessibleStudios } from "@/lib/auth";
 import { normalizePhone } from "@/lib/phone";
-import { parseCsvWithHeader, resolveName, cellAt, type GuestColumnMapping } from "@/lib/csv";
+import { parseCsvWithHeader, resolveName, cellAt, parseDateCell, type GuestColumnMapping } from "@/lib/csv";
 
 // Bulk-importing (and potentially overwriting/duplicating) a studio's whole
 // guest list is a bigger blast radius than the usual add-a-note edit on
@@ -72,6 +72,8 @@ export async function confirmImportBatchAction(formData: FormData) {
     phoneCol: (formData.get("phoneCol") as string) || null,
     emailCol: (formData.get("emailCol") as string) || null,
     notesCol: (formData.get("notesCol") as string) || null,
+    sourceCol: (formData.get("sourceCol") as string) || null,
+    memberSinceCol: (formData.get("memberSinceCol") as string) || null,
   };
 
   const [batch] = await db
@@ -92,7 +94,15 @@ export async function confirmImportBatchAction(formData: FormData) {
     // phone number, not name — loaded once here rather than per-row so a
     // 1,000-row import doesn't run 1,000 separate lookup queries.
     const existing = await tx
-      .select({ id: schema.guests.id, name: schema.guests.name, phone: schema.guests.phone, email: schema.guests.email, notes: schema.guests.notes })
+      .select({
+        id: schema.guests.id,
+        name: schema.guests.name,
+        phone: schema.guests.phone,
+        email: schema.guests.email,
+        notes: schema.guests.notes,
+        source: schema.guests.source,
+        memberSince: schema.guests.memberSince,
+      })
       .from(schema.guests)
       .where(and(eq(schema.guests.studioId, studioId), isNotNull(schema.guests.phone)));
     const byPhone = new Map<string, (typeof existing)[number]>();
@@ -106,6 +116,9 @@ export async function confirmImportBatchAction(formData: FormData) {
       const rawPhone = cellAt(headers, row, mapping.phoneCol);
       const email = cellAt(headers, row, mapping.emailCol);
       const notes = cellAt(headers, row, mapping.notesCol);
+      const source = cellAt(headers, row, mapping.sourceCol);
+      const memberSinceRaw = cellAt(headers, row, mapping.memberSinceCol);
+      const memberSince = memberSinceRaw ? parseDateCell(memberSinceRaw) : null;
       const normalized = normalizePhone(rawPhone);
 
       if (!name) {
@@ -121,6 +134,8 @@ export async function confirmImportBatchAction(formData: FormData) {
         if (!match.phone && rawPhone) patch.phone = rawPhone;
         if (!match.email && email) patch.email = email;
         if (!match.notes && notes) patch.notes = notes;
+        if (!match.source && source) patch.source = source;
+        if (!match.memberSince && memberSince) patch.memberSince = memberSince;
         if (Object.keys(patch).length > 0) {
           await tx.update(schema.guests).set(patch).where(eq(schema.guests.id, match.id));
         }
@@ -134,10 +149,21 @@ export async function confirmImportBatchAction(formData: FormData) {
             phone: rawPhone || null,
             email: email || null,
             notes: notes || null,
+            source: source || null,
+            memberSince,
           })
           .returning({ id: schema.guests.id, phone: schema.guests.phone });
         inserted++;
-        if (normalized) byPhone.set(normalized, { id: created.id, name, phone: created.phone, email: email || null, notes: notes || null });
+        if (normalized)
+          byPhone.set(normalized, {
+            id: created.id,
+            name,
+            phone: created.phone,
+            email: email || null,
+            notes: notes || null,
+            source: source || null,
+            memberSince,
+          });
       }
     }
 

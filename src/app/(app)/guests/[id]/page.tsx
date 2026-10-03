@@ -4,7 +4,7 @@ import { and, eq, desc } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext, requireRole } from "@/lib/context";
 import { localDateKey } from "@/lib/time";
-import { updateGuestAction } from "../actions";
+import { updateGuestAction, setMembershipCreditsAction, grantCreditsAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -28,13 +28,19 @@ export default async function GuestDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ saved?: string; error?: string }>;
+  searchParams: Promise<{
+    saved?: string;
+    error?: string;
+    adjusted?: string;
+    adjustError?: string;
+  }>;
 }) {
   const { id } = await params;
-  const { saved, error } = await searchParams;
+  const { saved, error, adjusted, adjustError } = await searchParams;
   const guestId = Number(id);
   const { studio, role } = await requirePageContext();
   requireRole(role, ["owner", "manager", "receptionist"]);
+  const canAdjustCredits = role === "owner" || role === "manager";
 
   const [guest] = await db
     .select()
@@ -129,6 +135,19 @@ export default async function GuestDetailPage({
       {error === "missing_name" && (
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">Name can&apos;t be empty.</p>
       )}
+      {error === "invalid_member_since" && (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">
+          Member since must be a valid date.
+        </p>
+      )}
+      {adjusted && (
+        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Credits updated.</p>
+      )}
+      {adjustError === "invalid" && (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">
+          Couldn&apos;t make that change — check the values and try again.
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="space-y-4">
@@ -173,6 +192,24 @@ export default async function GuestDetailPage({
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
                 />
               </div>
+              <div>
+                <label className="block text-xs text-stone-500">Source</label>
+                <input
+                  name="source"
+                  defaultValue={guest.source ?? ""}
+                  placeholder="Instagram, Referral, Walk-in…"
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-stone-500">Member since</label>
+                <input
+                  name="memberSince"
+                  type="date"
+                  defaultValue={guest.memberSince ?? ""}
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                />
+              </div>
               <button className="rounded-lg bg-stone-900 px-3 py-2 text-sm font-medium text-white hover:bg-stone-800">
                 Save
               </button>
@@ -187,18 +224,38 @@ export default async function GuestDetailPage({
             {activeMemberships.length > 0 && (
               <ul className="space-y-2">
                 {activeMemberships.map((m) => (
-                  <li key={m.id} className="flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-2 text-sm">
-                    <span className="text-emerald-900">
-                      {m.type === "unlimited_monthly"
-                        ? "Monthly unlimited"
-                        : m.type === "drop_in"
-                          ? "Drop-in"
-                          : "Class pack"}
-                    </span>
-                    <span className="text-xs text-emerald-700">
-                      {m.type === "unlimited_monthly" ? "unlimited" : `${m.remainingCredits ?? 0}/${m.totalCredits ?? 0} left`}
-                      {m.expiresOn && ` · expires ${m.expiresOn}`}
-                    </span>
+                  <li key={m.id} className="rounded-lg bg-emerald-50 px-3 py-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-emerald-900">
+                        {m.type === "unlimited_monthly"
+                          ? "Monthly unlimited"
+                          : m.type === "drop_in"
+                            ? "Drop-in"
+                            : "Class pack"}
+                      </span>
+                      <span className="text-xs text-emerald-700">
+                        {m.type === "unlimited_monthly" ? "unlimited" : `${m.remainingCredits ?? 0}/${m.totalCredits ?? 0} left`}
+                        {m.expiresOn && ` · expires ${m.expiresOn}`}
+                      </span>
+                    </div>
+                    {canAdjustCredits && m.type !== "unlimited_monthly" && (
+                      <form action={setMembershipCreditsAction} className="mt-2 flex items-center gap-2">
+                        <input type="hidden" name="studioId" value={studio.id} />
+                        <input type="hidden" name="guestId" value={guest.id} />
+                        <input type="hidden" name="membershipId" value={m.id} />
+                        <label className="text-xs text-emerald-700">Set remaining:</label>
+                        <input
+                          name="remainingCredits"
+                          type="number"
+                          step={1}
+                          defaultValue={m.remainingCredits ?? 0}
+                          className="w-16 rounded-md border border-emerald-200 bg-white px-2 py-1 text-xs"
+                        />
+                        <button className="rounded-md bg-emerald-700 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-800">
+                          Update
+                        </button>
+                      </form>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -223,6 +280,57 @@ export default async function GuestDetailPage({
               </details>
             )}
           </div>
+
+          {canAdjustCredits && (
+            <div className="rounded-xl border border-stone-200 bg-white p-4">
+              <h2 className="mb-1 text-sm font-semibold text-stone-900">Grant credits (no charge)</h2>
+              <p className="mb-3 text-xs text-stone-400">
+                For gifts, goodwill, or backfilling a balance from elsewhere — doesn&apos;t record a
+                payment. To sell a real package, use Check-in instead.
+              </p>
+              <form action={grantCreditsAction} className="space-y-2">
+                <input type="hidden" name="studioId" value={studio.id} />
+                <input type="hidden" name="guestId" value={guest.id} />
+                <div>
+                  <label className="block text-xs text-stone-500">Type</label>
+                  <select
+                    name="type"
+                    defaultValue="class_pack"
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                  >
+                    <option value="drop_in">Drop-in</option>
+                    <option value="class_pack">Class pack</option>
+                    <option value="unlimited_monthly">Monthly unlimited</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-stone-500">Credits (leave blank for unlimited)</label>
+                  <input
+                    name="credits"
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder="e.g. 5"
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-stone-500">Valid for (months, optional)</label>
+                  <input
+                    name="validityMonths"
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder="e.g. 2 — leave blank for no expiry"
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <button className="rounded-lg bg-stone-900 px-3 py-2 text-sm font-medium text-white hover:bg-stone-800">
+                  Grant
+                </button>
+              </form>
+            </div>
+          )}
 
           {upcoming.length > 0 && (
             <div className="rounded-xl border border-stone-200 bg-white p-4">

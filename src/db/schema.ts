@@ -166,6 +166,19 @@ export const guests = pgTable("guests", {
   email: varchar("email", { length: 160 }),
   phone: varchar("phone", { length: 40 }),
   notes: text("notes"),
+  // Where this guest came from — e.g. "Instagram", "Referral", "Walk-in",
+  // or "Wix import" for guests brought in via CSV. Free text, not an enum:
+  // studios will each have their own informal attribution vocabulary and
+  // forcing a fixed list would just lead to "Other" becoming a dumping
+  // ground. Unrecoverable once lost, so worth capturing at CSV import time
+  // even though nothing else in the app uses it yet (reporting is a
+  // reasonable next step, not done here).
+  source: varchar("source", { length: 120 }),
+  // The guest's real-world start date with the studio, when known — e.g.
+  // imported from Wix's own "member since" field. Deliberately separate
+  // from createdAt (which is just "when this row was created in KOP" and
+  // would otherwise make every CSV-imported guest look brand new).
+  memberSince: date("member_since"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

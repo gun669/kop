@@ -129,11 +129,24 @@ export default async function CheckInPage({
       .where(inArray(schema.memberships.guestId, Array.from(guestIdsNeedingMemberships)));
     for (const guestId of guestIdsNeedingMemberships) {
       const ms = allMemberships.filter((m) => m.guestId === guestId);
-      const usable = ms.filter(
-        (m) =>
-          (m.remainingCredits === null || m.remainingCredits > 0) &&
-          (!m.expiresOn || m.expiresOn >= todayKey)
-      );
+      const usable = ms
+        .filter(
+          (m) =>
+            (m.remainingCredits === null || m.remainingCredits > 0) &&
+            (!m.expiresOn || m.expiresOn >= todayKey)
+        )
+        // Deterministic draw order — soonest-to-expire finite-credit pack
+        // first, so a guest's older pack gets used up before a newer one
+        // instead of whichever row Postgres happened to return first (no
+        // ORDER BY here previously meant the pack a credit got debited from
+        // was effectively random). Packs with no expiry (e.g. unlimited)
+        // sort last since there's no urgency to draw from them first.
+        .sort((a, b) => {
+          if (!a.expiresOn && !b.expiresOn) return a.id - b.id;
+          if (!a.expiresOn) return 1;
+          if (!b.expiresOn) return -1;
+          return a.expiresOn < b.expiresOn ? -1 : a.expiresOn > b.expiresOn ? 1 : a.id - b.id;
+        });
       membershipsByGuest.set(guestId, usable);
 
       const exhausted = ms

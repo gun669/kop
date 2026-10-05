@@ -129,7 +129,13 @@ export async function buildRoster(classSessionId: number): Promise<RosterEntry[]
     .innerJoin(schema.guests, eq(schema.bookings.guestId, schema.guests.id))
     .where(eq(schema.bookings.classSessionId, classSessionId));
 
-  const bookedGuestIds = new Set(bookingRows.map((b) => b.guestId));
+  // Only an active ("booked") reservation counts as "came in online" — a
+  // guest whose booking was cancelled/no-showed/late-cancelled shouldn't be
+  // tagged "booked online" if they then show up and get checked in as a
+  // walk-in; that used to include every booking row regardless of status.
+  const bookedGuestIds = new Set(
+    bookingRows.filter((b) => b.status === "booked").map((b) => b.guestId)
+  );
 
   const entries: RosterEntry[] = signInRows.map((s) => ({
     guestId: s.guestId,

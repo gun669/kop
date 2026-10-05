@@ -180,6 +180,18 @@ export async function checkInExistingGuestAction(formData: FormData) {
   const { session } = await assertCanManageCheckIn(studioId, classSessionId);
 
   await db.transaction(async (tx) => {
+    // Guard against a double-submit (double-click, slow-connection retry,
+    // two staff tapping the same guest at once) inserting a second sign-in
+    // row for the same guest/class — which would double-charge the credit
+    // below and show the guest twice on the roster. Same spirit as
+    // quickAddAndCheckInAction's existing-sign-in check.
+    const [already] = await tx
+      .select({ id: schema.signIns.id })
+      .from(schema.signIns)
+      .where(and(eq(schema.signIns.classSessionId, classSessionId), eq(schema.signIns.guestId, guestId)))
+      .limit(1);
+    if (already) return;
+
     await tx.insert(schema.signIns).values({
       studioId,
       classSessionId,
@@ -205,10 +217,16 @@ export async function checkInExistingGuestAction(formData: FormData) {
       );
 
     if (membershipId) {
+      // Confirm the membership actually belongs to this guest before
+      // touching its balance — the id arrives as a plain hidden form
+      // field, and without this check a tampered or stale value could
+      // decrement a different guest's credits while this guest gets
+      // checked in. (checkInWithNegativeOverrideAction already guarded
+      // this; this path hadn't.)
       const [m] = await tx
         .select()
         .from(schema.memberships)
-        .where(eq(schema.memberships.id, membershipId))
+        .where(and(eq(schema.memberships.id, membershipId), eq(schema.memberships.guestId, guestId)))
         .limit(1);
       if (m && m.remainingCredits !== null && m.remainingCredits > 0) {
         await tx
@@ -239,6 +257,15 @@ export async function checkInWithNegativeOverrideAction(formData: FormData) {
   if (!membershipId) throw new Error("A membership is required for a negative-balance override");
 
   await db.transaction(async (tx) => {
+    // Same double-submit guard as checkInExistingGuestAction — a repeated
+    // click here would otherwise take the same guest's pack negative twice.
+    const [already] = await tx
+      .select({ id: schema.signIns.id })
+      .from(schema.signIns)
+      .where(and(eq(schema.signIns.classSessionId, classSessionId), eq(schema.signIns.guestId, guestId)))
+      .limit(1);
+    if (already) return;
+
     await tx.insert(schema.signIns).values({
       studioId,
       classSessionId,

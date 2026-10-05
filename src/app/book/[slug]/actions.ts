@@ -8,6 +8,7 @@ import { bookGuestForSession } from "@/lib/booking";
 import { packageByKey } from "@/lib/packages";
 import { isIyzicoConfigured, initializeCheckoutForm } from "@/lib/iyzico";
 import { normalizePhone } from "@/lib/phone";
+import { sendBookingConfirmationEmail } from "@/lib/email";
 
 // Public server action behind the guest-facing booking page — no session,
 // no studio-access check like the internal app has, since anyone with the
@@ -22,6 +23,7 @@ export async function bookSessionAction(formData: FormData) {
   const day = String(formData.get("day") ?? "");
   const name = String(formData.get("name") ?? "").trim();
   const phone = String(formData.get("phone") ?? "").trim();
+  const email = String(formData.get("email") ?? "").trim();
 
   const backTo = (params: Record<string, string>) => {
     const qs = new URLSearchParams({ day, ...params });
@@ -45,8 +47,13 @@ export async function bookSessionAction(formData: FormData) {
       studioId: schema.classSessions.studioId,
       status: schema.classSessions.status,
       startsAt: schema.classSessions.startsAt,
+      room: schema.classSessions.room,
+      classTypeName: schema.classTypes.name,
+      teacherName: schema.teachers.name,
     })
     .from(schema.classSessions)
+    .leftJoin(schema.classTypes, eq(schema.classSessions.classTypeId, schema.classTypes.id))
+    .leftJoin(schema.teachers, eq(schema.classSessions.teacherId, schema.teachers.id))
     .where(eq(schema.classSessions.id, classSessionId))
     .limit(1);
 
@@ -64,11 +71,22 @@ export async function bookSessionAction(formData: FormData) {
     classSessionId,
     name,
     phone,
+    email,
   });
 
   if (!result.ok) {
     redirect(backTo({ error: result.reason }));
   }
+
+  // Effective email for a confirmation — whatever's now on the guest's
+  // record (just-typed this time, or already on file from a previous
+  // booking/import). A fresh select rather than threading it back through
+  // bookGuestForSession's result, since most callers don't need it.
+  const [guestForEmail] = await db
+    .select({ email: schema.guests.email })
+    .from(schema.guests)
+    .where(eq(schema.guests.id, result.guestId))
+    .limit(1);
 
   // Real Iyzico payment collection (Launch Path p4) — deliberately
   // additive and fail-open: if Iyzico isn't configured (no live/sandbox
@@ -173,5 +191,25 @@ export async function bookSessionAction(formData: FormData) {
   }
 
   if (paymentRedirectUrl) redirect(paymentRedirectUrl);
+
+  // Confirmation email — only for the free / pay-at-studio path. A paid
+  // booking's confirmation is sent from the Iyzico callback route instead,
+  // once the payment has actually been confirmed server-to-server (never
+  // here, before the guest has even reached the checkout page).
+  if (guestForEmail?.email) {
+    await sendBookingConfirmationEmail({
+      to: guestForEmail.email,
+      guestName: name,
+      class: {
+        studioName: studio.name,
+        classTypeName: sessionRow.classTypeName,
+        teacherName: sessionRow.teacherName,
+        room: sessionRow.room,
+        startsAt: sessionRow.startsAt,
+        timezone: studio.timezone,
+      },
+    });
+  }
+
   redirect(backTo({ confirmed: String(classSessionId) }));
 }

@@ -303,6 +303,12 @@ export default async function PublicBookingPage({
                                 placeholder="Phone number"
                                 className="w-full rounded-lg border border-[#DDD5C7] bg-white px-3 py-2 text-sm text-[#52504E] placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
                               />
+                              <input
+                                name="email"
+                                type="email"
+                                placeholder="Email (for your booking confirmation)"
+                                className="w-full rounded-lg border border-[#DDD5C7] bg-white px-3 py-2 text-sm text-[#52504E] placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
+                              />
                               <button className="w-full rounded-lg border border-[#8C3B28] bg-[#8C3B28] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7a3222]">
                                 Confirm spot
                               </button>

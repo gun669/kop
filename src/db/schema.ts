@@ -311,6 +311,11 @@ export const bookings = pgTable(
     // Where the booking came from — today always "widget", but keeps room
     // for staff-entered bookings later without a schema change.
     source: varchar("source", { length: 20 }).notNull().default("widget"),
+    // Set once the class-reminders cron (src/app/api/cron/class-reminders)
+    // has emailed this guest about this booking — the de-dupe guard that
+    // stops the same "see you tomorrow" email going out twice if more than
+    // one hourly run lands inside the same lookahead window.
+    reminderSentAt: timestamp("reminder_sent_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [uniqueIndex("booking_session_guest_unique").on(t.classSessionId, t.guestId)]

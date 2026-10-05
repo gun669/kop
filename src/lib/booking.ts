@@ -21,9 +21,11 @@ export async function bookGuestForSession(params: {
   classSessionId: number;
   name: string;
   phone: string;
+  email?: string;
 }): Promise<BookingResult> {
   const name = params.name.trim();
   const normalizedPhone = normalizePhone(params.phone);
+  const email = params.email?.trim() || null;
 
   return db.transaction(async (tx) => {
     // 1. Find-or-create the guest by phone — the safe identity key (see
@@ -40,9 +42,15 @@ export async function bookGuestForSession(params: {
     if (guestId === -1) {
       const [guest] = await tx
         .insert(schema.guests)
-        .values({ studioId: params.studioId, name, phone: params.phone || null })
+        .values({ studioId: params.studioId, name, phone: params.phone || null, email })
         .returning();
       guestId = guest.id;
+    } else if (email) {
+      // Returning guest typed an email this time (or a different one than
+      // what's on file) — keep it current so confirmations/reminders can
+      // reach them. Never overwrites an existing email with a blank
+      // submission (the widget doesn't require email on every booking).
+      await tx.update(schema.guests).set({ email }).where(eq(schema.guests.id, guestId));
     }
 
     // 2. Capacity check: attended sign-ins (walk-ins today) + active

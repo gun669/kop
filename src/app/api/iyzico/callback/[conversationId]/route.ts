@@ -31,6 +31,7 @@ import { db, schema } from "@/db";
 import { retrieveCheckoutForm, checkoutFormWasSuccessful } from "@/lib/iyzico";
 import { addMonthsToDateString } from "@/lib/packages";
 import { localDateKey } from "@/lib/time";
+import { sendBookingConfirmationEmail } from "@/lib/email";
 
 async function handleCallback(req: NextRequest, conversationId: string) {
   // No slug known yet at this point — if conversationId itself is missing
@@ -74,12 +75,22 @@ async function handleCallback(req: NextRequest, conversationId: string) {
     })
     .where(eq(schema.payments.id, payment.id));
 
-  // Find the booking's class session so we can send the guest back to the
-  // right day on the public booking page either way.
+  // Find the booking's class session (plus enough detail for a
+  // confirmation email) so we can send the guest back to the right day on
+  // the public booking page either way.
   const [booking] = payment.bookingId
     ? await db
-        .select({ classSessionId: schema.bookings.classSessionId })
+        .select({
+          classSessionId: schema.bookings.classSessionId,
+          startsAt: schema.classSessions.startsAt,
+          room: schema.classSessions.room,
+          classTypeName: schema.classTypes.name,
+          teacherName: schema.teachers.name,
+        })
         .from(schema.bookings)
+        .innerJoin(schema.classSessions, eq(schema.bookings.classSessionId, schema.classSessions.id))
+        .leftJoin(schema.classTypes, eq(schema.classSessions.classTypeId, schema.classTypes.id))
+        .leftJoin(schema.teachers, eq(schema.classSessions.teacherId, schema.teachers.id))
         .where(eq(schema.bookings.id, payment.bookingId))
         .limit(1)
     : [];
@@ -131,6 +142,33 @@ async function handleCallback(req: NextRequest, conversationId: string) {
         .set({ membershipId: membership.id })
         .where(eq(schema.payments.id, payment.id));
     });
+
+    // Confirmation email — only now, after the payment is actually
+    // confirmed server-to-server and the credit's been granted. Never sent
+    // from bookSessionAction itself for a paid booking (the guest hasn't
+    // reached Iyzico's checkout yet at that point).
+    if (booking) {
+      const [guest] = await db
+        .select({ email: schema.guests.email, name: schema.guests.name })
+        .from(schema.guests)
+        .where(eq(schema.guests.id, payment.guestId))
+        .limit(1);
+      if (guest?.email) {
+        await sendBookingConfirmationEmail({
+          to: guest.email,
+          guestName: guest.name,
+          class: {
+            studioName: studio.name,
+            classTypeName: booking.classTypeName,
+            teacherName: booking.teacherName,
+            room: booking.room,
+            startsAt: booking.startsAt,
+            timezone: studio.timezone,
+          },
+          paid: { amount: payment.amount, currency: payment.currency ?? studio.currency },
+        });
+      }
+    }
   }
 
   bookUrl.searchParams.set("paid", "1");

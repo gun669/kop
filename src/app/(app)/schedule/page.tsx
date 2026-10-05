@@ -11,7 +11,6 @@ import {
   formatTimeInZone,
   formatTimeValue,
 } from "@/lib/time";
-import { ensureWeekGenerated } from "@/lib/scheduleTemplates";
 import {
   createSessionAction,
   updateSessionAction,
@@ -51,15 +50,6 @@ export default async function SchedulePage({
   const weekStart = parseWeekParam(week, studio.timezone);
   const weekEnd = new Date(weekStart.getTime() + 7 * 86_400_000);
   const days = weekDays(weekStart);
-
-  // Lazily fill this week in from the studio's default template, if it's
-  // empty and one exists. A no-op most of the time (past/already-viewed
-  // weeks already have sessions). Only owner/manager views trigger this —
-  // a teacher just viewing their own week shouldn't populate the whole
-  // studio's schedule.
-  if (isManager) {
-    await ensureWeekGenerated(studio, weekStart, weekEnd);
-  }
 
   const prevWeekKey = localDateKey(new Date(weekStart.getTime() - 7 * 86_400_000), studio.timezone);
   const nextWeekKey = localDateKey(new Date(weekStart.getTime() + 7 * 86_400_000), studio.timezone);

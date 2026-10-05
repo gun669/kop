@@ -1,73 +1,24 @@
-import { and, count, eq, gte, lt } from "drizzle-orm";
+import { and, eq, gte, lt } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { combineLocalDateTime, localDateKey, mondayOfWeek, weekDays } from "./time";
 
 // How many weeks ahead "create a class from template" backfills real
-// sessions for a newly-added recurring slot. Weeks further out than this
-// still pick up the slot once ensureWeekGenerated() reaches them (an empty
-// week pulls in every slot on the default template, this one included) —
-// this horizon just means the manager doesn't have to wait for that: the
-// next couple of months show up right away, same spirit as bills' 60-day
-// recurring-occurrence horizon.
+// sessions for a newly-added recurring slot — the next couple of months
+// show up right away, same spirit as bills' 60-day recurring-occurrence
+// horizon.
+//
+// Note (Oct 2026): this used to also be topped up by an ensureWeekGenerated()
+// that auto-filled any empty week from the studio's default template on
+// every /schedule page view. Removed per Gün: studios keep their own
+// schedule populated, and the lazy "does this week have zero sessions?"
+// check-then-insert had a real race condition — two concurrent page loads
+// on a genuinely empty week (two tabs, a prefetch + a real nav, two staff
+// opening /schedule at once) could both see zero and both insert the full
+// week's template, producing exact duplicate classes. The explicit
+// "recurring?" flow below is the one real path left for getting classes
+// onto the calendar from a template, and it already guards against
+// double-inserting the same slot/time.
 const RECURRING_BACKFILL_WEEKS = 8;
-
-// If a week has zero sessions and the studio has a default template, fills
-// that week in from the template — so future weeks stay populated without
-// anyone having to click anything. Only ever acts on a genuinely empty
-// week: once a week has any session in it (generated or manual), it's left
-// alone, so this never clobbers edits.
-export async function ensureWeekGenerated(
-  studio: { id: number; timezone: string },
-  weekStart: Date,
-  weekEnd: Date
-) {
-  const [{ value: existingCount }] = await db
-    .select({ value: count() })
-    .from(schema.classSessions)
-    .where(
-      and(
-        eq(schema.classSessions.studioId, studio.id),
-        gte(schema.classSessions.startsAt, weekStart),
-        lt(schema.classSessions.startsAt, weekEnd)
-      )
-    );
-  if (existingCount > 0) return;
-
-  const [defaultTemplate] = await db
-    .select()
-    .from(schema.scheduleTemplates)
-    .where(
-      and(
-        eq(schema.scheduleTemplates.studioId, studio.id),
-        eq(schema.scheduleTemplates.isDefault, true)
-      )
-    )
-    .limit(1);
-  if (!defaultTemplate) return;
-
-  const slots = await db
-    .select()
-    .from(schema.scheduleTemplateSlots)
-    .where(eq(schema.scheduleTemplateSlots.templateId, defaultTemplate.id));
-  if (slots.length === 0) return;
-
-  const days = weekDays(weekStart);
-  await db.insert(schema.classSessions).values(
-    slots.map((slot) => ({
-      studioId: studio.id,
-      teacherId: slot.teacherId,
-      classTypeId: slot.classTypeId,
-      room: slot.room,
-      startsAt: combineLocalDateTime(
-        localDateKey(days[slot.weekday] ?? days[0], studio.timezone),
-        slot.time,
-        studio.timezone
-      ),
-      capacity: slot.capacity,
-      status: "scheduled" as const,
-    }))
-  );
-}
 
 // "Create a class from template" (recurring mode): adds a new weekly slot
 // to the studio's default template (creating one if it somehow doesn't

@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, gte, lt, count } from "drizzle-orm";
+import { and, eq, count } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { getSession, getAccessibleStudios } from "@/lib/auth";
-import { combineLocalDateTime, localDateKey, weekDays } from "@/lib/time";
+import { combineLocalDateTime, localDateKey, weekDays, weekdayIndexInZone } from "@/lib/time";
+import { addRecurringSlotAndBackfill } from "@/lib/scheduleTemplates";
 
 async function assertManagerAccess(studioId: number) {
   const session = await getSession();
@@ -17,10 +18,19 @@ async function assertManagerAccess(studioId: number) {
   return { session, studio };
 }
 
+// Adds a class from the "+ Add a class" form on a given day. Two modes,
+// picked by the manager right after choosing a class type:
+//  - "one_time" (default): a single session on this exact date, same as
+//    before — no template involved at all.
+//  - "recurring": this class happens every week from now on. Adds a new
+//    slot to the studio's default template (so future weeks keep including
+//    it automatically) and backfills real sessions into the next several
+//    already-generated weeks — see addRecurringSlotAndBackfill().
 export async function createSessionAction(formData: FormData) {
   const studioId = Number(formData.get("studioId"));
   const { studio } = await assertManagerAccess(studioId);
 
+  const mode = String(formData.get("mode") ?? "one_time");
   const date = String(formData.get("date"));
   const time = String(formData.get("time"));
   const teacherId = Number(formData.get("teacherId")) || null;
@@ -28,15 +38,27 @@ export async function createSessionAction(formData: FormData) {
   const room = String(formData.get("room") ?? "").trim() || null;
   const capacity = Number(formData.get("capacity")) || 20;
 
-  await db.insert(schema.classSessions).values({
-    studioId,
-    teacherId,
-    classTypeId,
-    room,
-    startsAt: combineLocalDateTime(date, time, studio.timezone),
-    capacity,
-    status: "scheduled",
-  });
+  if (mode === "recurring") {
+    await addRecurringSlotAndBackfill(studio, {
+      weekday: weekdayIndexInZone(date, studio.timezone),
+      time,
+      teacherId,
+      classTypeId,
+      room,
+      capacity,
+    });
+    revalidatePath("/templates");
+  } else {
+    await db.insert(schema.classSessions).values({
+      studioId,
+      teacherId,
+      classTypeId,
+      room,
+      startsAt: combineLocalDateTime(date, time, studio.timezone),
+      capacity,
+      status: "scheduled",
+    });
+  }
 
   revalidatePath("/schedule");
   revalidatePath("/checkin");
@@ -110,47 +132,6 @@ export async function reinstateSessionAction(formData: FormData) {
     .update(schema.classSessions)
     .set({ status: "scheduled" })
     .where(and(eq(schema.classSessions.id, sessionId), eq(schema.classSessions.studioId, studioId)));
-
-  revalidatePath("/schedule");
-}
-
-// Duplicates every non-cancelled class from one week onto another — the
-// realistic weekly workflow ("mostly the same as last week, tweak a few
-// teacher slots") instead of re-entering the whole schedule by hand.
-export async function copyWeekAction(formData: FormData) {
-  const studioId = Number(formData.get("studioId"));
-  await assertManagerAccess(studioId);
-
-  const fromWeekStart = new Date(String(formData.get("fromWeekStart")));
-  const toWeekStart = new Date(String(formData.get("toWeekStart")));
-  const fromWeekEnd = new Date(fromWeekStart.getTime() + 7 * 86_400_000);
-  const shift = toWeekStart.getTime() - fromWeekStart.getTime();
-
-  const sourceSessions = await db
-    .select()
-    .from(schema.classSessions)
-    .where(
-      and(
-        eq(schema.classSessions.studioId, studioId),
-        gte(schema.classSessions.startsAt, fromWeekStart),
-        lt(schema.classSessions.startsAt, fromWeekEnd)
-      )
-    );
-
-  const toCopy = sourceSessions.filter((s) => s.status !== "cancelled");
-  if (toCopy.length > 0) {
-    await db.insert(schema.classSessions).values(
-      toCopy.map((s) => ({
-        studioId,
-        teacherId: s.teacherId,
-        classTypeId: s.classTypeId,
-        room: s.room,
-        startsAt: new Date(s.startsAt.getTime() + shift),
-        capacity: s.capacity,
-        status: "scheduled" as const,
-      }))
-    );
-  }
 
   revalidatePath("/schedule");
 }

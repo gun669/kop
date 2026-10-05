@@ -89,6 +89,17 @@ export function weekDays(weekStart: Date) {
   return Array.from({ length: 7 }, (_, i) => new Date(weekStart.getTime() + i * 86_400_000));
 }
 
+// 0 = Monday .. 6 = Sunday for a given "YYYY-MM-DD" local date, matching
+// weekDays()'s ordering and schedule_template_slots.weekday's convention.
+// Shared by "create a class from template" (recurring mode) to work out
+// which weekday slot a chosen date corresponds to.
+export function weekdayIndexInZone(dateStr: string, timeZone: string) {
+  const anchor = new Date(`${dateStr}T12:00:00Z`);
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(anchor);
+  const order: Record<string, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+  return order[weekday] ?? 0;
+}
+
 // Parse a "?week=YYYY-MM-DD" param back into that week's Monday (local
 // midnight instant). Falls back to the current week if missing/invalid.
 export function parseWeekParam(param: string | undefined, timeZone: string) {

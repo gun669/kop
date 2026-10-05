@@ -36,6 +36,34 @@
       "when": 1789400612250,
       "tag": "0004_tidy_firebird",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789540689189,
+      "tag": "0005_public_omega_flight",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790163745802,
+      "tag": "0006_loud_mister_fear",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790759926999,
+      "tag": "0007_regular_sheva_callister",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791020551949,
+      "tag": "0008_bent_peter_parker",
+      "breakpoints": true
     }
   ]
 }

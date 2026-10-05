@@ -55,6 +55,12 @@ export const bookingStatusEnum = pgEnum("booking_status", [
   "booked",
   "cancelled",
   "attended",
+  // A booking still "booked" 10 minutes after its class started, with no
+  // matching sign-in, is auto-reconciled to this on the next check-in page
+  // view (see src/lib/checkin-roster.ts) — the guest never showed up and
+  // never told anyone. Distinct from "cancelled" (guest or staff actively
+  // cancelled ahead of time) so the two read differently in reporting.
+  "no_show",
 ]);
 
 // ---------- Accounts Payable (vendor bills, Launch Path b7) ----------
@@ -139,6 +145,14 @@ export const teachers = pgTable("teachers", {
   // in for them.
   bio: text("bio"),
   photoUrl: text("photo_url"),
+  // Launch Path b15: a private token identifying this teacher's ICS
+  // calendar-subscription feed (src/app/api/calendar/[token].ics). Lazily
+  // generated the first time they open /profile and ask for their link —
+  // null until then. Deliberately not the same as any session/auth token:
+  // this one is meant to sit in a URL a calendar app polls unattended, so
+  // it carries no other privileges and reveals nothing but this teacher's
+  // own class times.
+  icsToken: varchar("ics_token", { length: 64 }).unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -152,6 +166,33 @@ export const guests = pgTable("guests", {
   email: varchar("email", { length: 160 }),
   phone: varchar("phone", { length: 40 }),
   notes: text("notes"),
+  // Where this guest came from — e.g. "Instagram", "Referral", "Walk-in",
+  // or "Wix import" for guests brought in via CSV. Free text, not an enum:
+  // studios will each have their own informal attribution vocabulary and
+  // forcing a fixed list would just lead to "Other" becoming a dumping
+  // ground. Unrecoverable once lost, so worth capturing at CSV import time
+  // even though nothing else in the app uses it yet (reporting is a
+  // reasonable next step, not done here).
+  source: varchar("source", { length: 120 }),
+  // The guest's real-world start date with the studio, when known — e.g.
+  // imported from Wix's own "member since" field. Deliberately separate
+  // from createdAt (which is just "when this row was created in KOP" and
+  // would otherwise make every CSV-imported guest look brand new).
+  memberSince: date("member_since"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// A temporary staging row for a guest-list CSV export (e.g. from Wix
+// Contacts) mid-import — holds the raw file just long enough for a manager
+// to map its columns and confirm, then gets deleted. Not a permanent guest
+// data source; see src/app/(app)/guests/import.
+export const guestImportBatches = pgTable("guest_import_batches", {
+  id: serial("id").primaryKey(),
+  studioId: integer("studio_id")
+    .notNull()
+    .references(() => studios.id, { onDelete: "cascade" }),
+  fileName: varchar("file_name", { length: 255 }),
+  csvText: text("csv_text").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -542,6 +583,41 @@ export const signInsRelations = relations(signIns, ({ one }) => ({
 export const vendorBillsRelations = relations(vendorBills, ({ one }) => ({
   studio: one(studios, {
     fields: [vendorBills.studioId],
+    references: [studios.id],
+  }),
+}));
+
+// ---------- Report share links (Launch Path b14) ----------
+// A manager-generated, revocable link that renders a PDF of the P&L for a
+// fixed studio/period, with no KOP login required — so a report can be
+// handed to an accountant or a co-owner without giving them any actual
+// account access. Deliberately its own table rather than a query-param-
+// signed URL: a plain "revoked" flag here is what makes revocation a real,
+// immediate action ("this link doesn't work anymore") rather than
+// something that only stops working once a signature scheme's secret is
+// rotated for everyone at once.
+export const reportShareLinks = pgTable("report_share_links", {
+  id: serial("id").primaryKey(),
+  studioId: integer("studio_id")
+    .notNull()
+    .references(() => studios.id, { onDelete: "cascade" }),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  // Only "pnl" exists today (the Reports page's revenue & expenses
+  // section) — a varchar rather than an enum so a future report type
+  // doesn't need a migration to add here.
+  reportType: varchar("report_type", { length: 30 }).notNull().default("pnl"),
+  periodFrom: date("period_from").notNull(),
+  periodTo: date("period_to").notNull(),
+  revoked: boolean("revoked").notNull().default(false),
+  createdByUserId: integer("created_by_user_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const reportShareLinksRelations = relations(reportShareLinks, ({ one }) => ({
+  studio: one(studios, {
+    fields: [reportShareLinks.studioId],
     references: [studios.id],
   }),
 }));

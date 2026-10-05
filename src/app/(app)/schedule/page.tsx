@@ -17,7 +17,6 @@ import {
   updateSessionAction,
   removeSessionAction,
   reinstateSessionAction,
-  copyWeekAction,
   applyTemplateAction,
 } from "./actions";
 
@@ -66,6 +65,7 @@ export default async function SchedulePage({
   const nextWeekKey = localDateKey(new Date(weekStart.getTime() + 7 * 86_400_000), studio.timezone);
   const thisWeekKey = localDateKey(mondayOfWeek(studio.timezone), studio.timezone);
   const isCurrentWeek = localDateKey(weekStart, studio.timezone) === thisWeekKey;
+  const todayKey = localDateKey(new Date(), studio.timezone);
 
   const [sessions, teachers, classTypes, templates] = await Promise.all([
     db
@@ -136,14 +136,6 @@ export default async function SchedulePage({
           </Link>
           {isManager && (
             <>
-              <form action={copyWeekAction}>
-                <input type="hidden" name="studioId" value={studio.id} />
-                <input type="hidden" name="fromWeekStart" value={new Date(weekStart.getTime() - 7 * 86_400_000).toISOString()} />
-                <input type="hidden" name="toWeekStart" value={weekStart.toISOString()} />
-                <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-800">
-                  Copy last week in
-                </button>
-              </form>
               {templates.length > 0 && (
                 <form action={applyTemplateAction} className="flex items-center gap-1.5">
                   <input type="hidden" name="studioId" value={studio.id} />
@@ -197,14 +189,31 @@ export default async function SchedulePage({
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {/* A real calendar row — every day its own column, side by side, same
+          layout system as the guest-facing booking page (p7) so the two
+          don't diverge, plus the manager edit/add affordances underneath
+          that a guest never sees. Horizontally scrollable when the
+          viewport is narrower than 7 columns; stacks vertically on phones
+          since a manager typically needs the whole week, not just today. */}
+      <div className="space-y-4 sm:-mx-1 sm:flex sm:gap-3 sm:space-y-0 sm:overflow-x-auto sm:pb-2">
         {days.map((day) => {
           const key = localDateKey(day, studio.timezone);
           const daySessions = sessionsByDay.get(key) ?? [];
+          const isToday = key === todayKey;
           return (
-            <div key={key} className="rounded-xl border border-stone-200 bg-white">
-              <div className="border-b border-stone-100 px-4 py-2 text-sm font-medium text-stone-700">
+            <div
+              key={key}
+              className={`overflow-hidden rounded-xl border bg-white sm:w-80 sm:shrink-0 ${
+                isToday ? "border-stone-400" : "border-stone-200"
+              }`}
+            >
+              <div
+                className={`border-b px-4 py-2 text-sm font-medium ${
+                  isToday ? "border-stone-300 bg-stone-100 text-stone-900" : "border-stone-100 text-stone-700"
+                }`}
+              >
                 {formatDayLabel(day, studio.timezone)}
+                {isToday && <span className="ml-1.5 text-xs font-normal text-stone-500">Today</span>}
               </div>
               <ul className="divide-y divide-stone-100">
                 {daySessions.length === 0 && (
@@ -306,17 +315,27 @@ export default async function SchedulePage({
                   <form action={createSessionAction} className="mt-2 space-y-2">
                     <input type="hidden" name="studioId" value={studio.id} />
                     <input type="hidden" name="date" value={key} />
+                    <select name="classTypeId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
+                      <option value="">Class type</option>
+                      {classTypes.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <fieldset className="flex gap-3 text-xs text-stone-600">
+                      <label className="flex items-center gap-1">
+                        <input type="radio" name="mode" value="one_time" defaultChecked />
+                        One-time
+                      </label>
+                      <label className="flex items-center gap-1">
+                        <input type="radio" name="mode" value="recurring" />
+                        Recurring (every week)
+                      </label>
+                    </fieldset>
                     <input type="time" name="time" required defaultValue="09:00" className="w-28 rounded-lg border border-stone-300 px-2 py-1.5 text-xs" />
                     <select name="teacherId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
                       <option value="">No teacher assigned</option>
                       {teachers.map((t) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                    <select name="classTypeId" className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs">
-                      <option value="">Class type</option>
-                      {classTypes.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
                     <div className="flex gap-2">

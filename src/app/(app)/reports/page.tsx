@@ -1,8 +1,14 @@
-import { and, eq, gte, lte, lt, ne, inArray, asc } from "drizzle-orm";
+import { headers } from "next/headers";
+import { and, eq, gte, lt, ne, inArray, asc, desc } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requirePageContext, requireRole } from "@/lib/context";
 import { localDateKey, combineLocalDateTime } from "@/lib/time";
-import { setTeacherPayRateAction } from "./actions";
+import { computePnl } from "@/lib/reports";
+import {
+  setTeacherPayRateAction,
+  createReportShareLinkAction,
+  revokeReportShareLinkAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -70,27 +76,8 @@ export default async function ReportsPage({
   const rangeStart = combineLocalDateTime(from, "00:00", studio.timezone);
   const rangeEnd = combineLocalDateTime(addDaysToDateKey(to, 1), "00:00", studio.timezone);
 
-  const [revenue, expenseRows, teachers, sessionsInRange] = await Promise.all([
-    db
-      .select()
-      .from(schema.revenueEntries)
-      .where(
-        and(
-          eq(schema.revenueEntries.studioId, studio.id),
-          gte(schema.revenueEntries.occurredOn, from),
-          lte(schema.revenueEntries.occurredOn, to)
-        )
-      ),
-    db
-      .select()
-      .from(schema.expenses)
-      .where(
-        and(
-          eq(schema.expenses.studioId, studio.id),
-          gte(schema.expenses.occurredOn, from),
-          lte(schema.expenses.occurredOn, to)
-        )
-      ),
+  const [pnl, teachers, sessionsInRange, shareLinks] = await Promise.all([
+    computePnl(studio.id, from, to),
     db
       .select()
       .from(schema.teachers)
@@ -110,7 +97,15 @@ export default async function ReportsPage({
           ne(schema.classSessions.status, "cancelled")
         )
       ),
+    db
+      .select()
+      .from(schema.reportShareLinks)
+      .where(and(eq(schema.reportShareLinks.studioId, studio.id), eq(schema.reportShareLinks.revoked, false)))
+      .orderBy(desc(schema.reportShareLinks.createdAt)),
   ]);
+
+  const hdrs = await headers();
+  const origin = `${hdrs.get("x-forwarded-proto") ?? "https"}://${hdrs.get("host")}`;
 
   const sessionIdsInRange = sessionsInRange.map((s) => s.id);
   const attendedSignIns = sessionIdsInRange.length
@@ -126,25 +121,7 @@ export default async function ReportsPage({
         )
     : [];
 
-  // --- Revenue & expenses (P&L) ---
-  const revenueBySource = new Map<string, { count: number; total: number }>();
-  for (const r of revenue) {
-    const cur = revenueBySource.get(r.source) ?? { count: 0, total: 0 };
-    cur.count += 1;
-    cur.total += Number(r.amount);
-    revenueBySource.set(r.source, cur);
-  }
-  const totalRevenue = revenue.reduce((s, r) => s + Number(r.amount), 0);
-
-  const expensesByCategory = new Map<string, { count: number; total: number }>();
-  for (const e of expenseRows) {
-    const cur = expensesByCategory.get(e.category) ?? { count: 0, total: 0 };
-    cur.count += 1;
-    cur.total += Number(e.amount);
-    expensesByCategory.set(e.category, cur);
-  }
-  const totalExpenses = expenseRows.reduce((s, e) => s + Number(e.amount), 0);
-  const net = totalRevenue - totalExpenses;
+  const { revenueBySource, expensesByCategory, totalRevenue, totalExpenses, net } = pnl;
 
   // --- Teacher payroll (estimated from attendance, not yet a payment record) ---
   const sessionCountByTeacher = new Map<number, number>();
@@ -286,6 +263,57 @@ export default async function ReportsPage({
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="mb-1 text-sm font-semibold text-stone-900">Share this report</h2>
+        <p className="mb-3 text-xs text-stone-400">
+          Generate a link that renders the revenue &amp; expenses above as a PDF for {from} – {to} — no KOP
+          login needed to open it, so you can hand it to an accountant or a co-owner without giving them
+          account access. Revoke a link any time and it stops working immediately.
+        </p>
+        <div className="rounded-xl border border-stone-200 bg-white">
+          <div className="flex items-center justify-between border-b border-stone-100 px-4 py-3">
+            <p className="text-xs text-stone-500">
+              For the period currently shown above ({from} – {to})
+            </p>
+            <form action={createReportShareLinkAction}>
+              <input type="hidden" name="studioId" value={studio.id} />
+              <input type="hidden" name="from" value={from} />
+              <input type="hidden" name="to" value={to} />
+              <button className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-800">
+                Generate PDF link
+              </button>
+            </form>
+          </div>
+          <ul className="divide-y divide-stone-100">
+            {shareLinks.map((link) => (
+              <li key={link.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-xs text-stone-500">
+                    {link.periodFrom} – {link.periodTo}
+                  </p>
+                  <a
+                    href={`${origin}/api/reports/share/${link.token}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block truncate text-xs text-stone-700 underline underline-offset-2"
+                  >
+                    {origin}/api/reports/share/{link.token}
+                  </a>
+                </div>
+                <form action={revokeReportShareLinkAction} className="shrink-0">
+                  <input type="hidden" name="studioId" value={studio.id} />
+                  <input type="hidden" name="linkId" value={link.id} />
+                  <button className="text-xs text-red-600 hover:underline">Revoke</button>
+                </form>
+              </li>
+            ))}
+            {shareLinks.length === 0 && (
+              <li className="px-4 py-3 text-sm text-stone-400">No active share links.</li>
+            )}
+          </ul>
         </div>
       </div>
 

@@ -9,11 +9,12 @@ export const dynamic = "force-dynamic";
 export default async function GuestsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; imported?: string; updated?: string; skipped?: string }>;
 }) {
-  const { q } = await searchParams;
+  const { q, imported, updated, skipped } = await searchParams;
   const { studio, role } = await requirePageContext();
   requireRole(role, ["owner", "manager", "receptionist"]);
+  const canImport = role === "owner" || role === "manager";
 
   const qDigits = (q ?? "").replace(/\D/g, "");
   const guests = await db
@@ -74,12 +75,38 @@ export default async function GuestsPage({
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-stone-900">Guests</h1>
-        <p className="mt-1 text-sm text-stone-500">
-          Everyone {studio.name} has on file — contact info, current packages, and attendance history.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold text-stone-900">Guests</h1>
+          <p className="mt-1 text-sm text-stone-500">
+            Everyone {studio.name} has on file — contact info, current packages, and attendance history.
+          </p>
+        </div>
+        {canImport && (
+          <div className="flex shrink-0 gap-2">
+            <a
+              href={`/api/guests/export?studioId=${studio.id}`}
+              className="rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-600 hover:bg-stone-50"
+            >
+              Export to CSV
+            </a>
+            <Link
+              href="/guests/import"
+              className="rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-600 hover:bg-stone-50"
+            >
+              Import from CSV
+            </Link>
+          </div>
+        )}
       </div>
+
+      {imported !== undefined && (
+        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          Import complete — {imported} new guest{imported === "1" ? "" : "s"} added
+          {updated && Number(updated) > 0 ? `, ${updated} existing guest${updated === "1" ? "" : "s"} updated` : ""}
+          {skipped && Number(skipped) > 0 ? `, ${skipped} row${skipped === "1" ? "" : "s"} skipped (no name)` : ""}.
+        </p>
+      )}
 
       <form className="flex gap-2">
         <input

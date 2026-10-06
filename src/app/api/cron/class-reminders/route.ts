@@ -1,14 +1,14 @@
 // "See you tomorrow" reminder emails (Gün, Oct 5 2026) — fired by a Vercel
-// Cron hitting this route hourly (see vercel.json). A class reminder can't
+// Cron hitting this route once a day at 06:00 UTC / 09:00 Istanbul (see vercel.json; Vercel Hobby only allows daily crons). A class reminder can't
 // use this app's usual lazy "run it when someone happens to load a page"
 // pattern (reconcileNoShows, the old ensureWeekGenerated): nobody is
 // guaranteed to load any page at exactly the right moment for every class,
 // every studio, every day — this genuinely needs a real schedule.
 //
-// Finds every still-"booked" reservation whose class starts 23–25 hours
-// from now (a 2-hour window so an hourly cron can't miss one to drift),
+// Finds every still-"booked" reservation whose class starts 12–36 hours
+// from now (a 24-hour window so a daily cron covers every class exactly once),
 // hasn't been reminded yet, and belongs to a guest with an email on file —
-// emails each, then stamps reminderSentAt so the next hourly run (or a
+// emails each, then stamps reminderSentAt so the next daily run (or a
 // manual retry) doesn't double-send. Entirely inert if RESEND_API_KEY/
 // EMAIL_FROM aren't set (see src/lib/email.ts) or CRON_SECRET is unset —
 // see below.
@@ -31,8 +31,8 @@ export async function GET(req: NextRequest) {
   }
 
   const now = Date.now();
-  const windowStart = new Date(now + 23 * 60 * 60_000);
-  const windowEnd = new Date(now + 25 * 60 * 60_000);
+  const windowStart = new Date(now + 12 * 60 * 60_000);
+  const windowEnd = new Date(now + 36 * 60 * 60_000);
 
   const due = await db
     .select({

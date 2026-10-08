@@ -9,6 +9,10 @@ import { packageByKey } from "@/lib/packages";
 import { isIyzicoConfigured, initializeCheckoutForm } from "@/lib/iyzico";
 import { normalizePhone } from "@/lib/phone";
 import { sendBookingConfirmationEmail } from "@/lib/email";
+import { findValidCoupon, applyCoupon, redeemCoupon, normalizeCouponCode } from "@/lib/coupons";
+import { buildGuestLinks } from "@/lib/guest-links";
+import { addMonthsToDateString } from "@/lib/packages";
+import { localDateKey } from "@/lib/time";
 
 // Public server action behind the guest-facing booking page — no session,
 // no studio-access check like the internal app has, since anyone with the
@@ -24,6 +28,7 @@ export async function bookSessionAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   const phone = String(formData.get("phone") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim();
+  const couponCode = normalizeCouponCode(String(formData.get("coupon") ?? ""));
 
   const backTo = (params: Record<string, string>) => {
     const qs = new URLSearchParams({ day, ...params });
@@ -66,6 +71,18 @@ export async function bookSessionAction(formData: FormData) {
     redirect(backTo({ error: "unavailable" }));
   }
 
+  // Coupon codes only discount the online drop-in price, so check up front
+  // (before a spot is reserved) that one was asked for, is valid, and that
+  // this studio can actually charge online. A bad code sends the guest back
+  // to fix it instead of silently booking at full price.
+  const dropInPackage = isIyzicoConfigured() ? packageByKey(studio.slug, "drop_in") : null;
+  let coupon: Awaited<ReturnType<typeof findValidCoupon>> | null = null;
+  if (couponCode) {
+    if (!dropInPackage) redirect(backTo({ error: "coupon_na" }));
+    coupon = await findValidCoupon(studio.id, couponCode, localDateKey(new Date(), studio.timezone));
+    if (!coupon.ok) redirect(backTo({ error: coupon.reason }));
+  }
+
   const result = await bookGuestForSession({
     studioId: studio.id,
     classSessionId,
@@ -100,9 +117,52 @@ export async function bookSessionAction(formData: FormData) {
   // it's unverified against Iyzico's real API, even though it's inert
   // (IYZICO_API_KEY unset) on every environment that currently runs.
   let paymentRedirectUrl: string | null = null;
-  if (isIyzicoConfigured()) {
-    const dropIn = packageByKey(studio.slug, "drop_in");
+  let couponFullyCovered = false;
+  if (dropInPackage) {
+    const dropIn = dropInPackage;
     if (dropIn) {
+      const priced = coupon && coupon.ok ? applyCoupon(dropIn.price, coupon.coupon) : null;
+      const chargePrice = priced ? priced.finalPrice : dropIn.price;
+      const couponFields =
+        priced && coupon && coupon.ok
+          ? { couponId: coupon.coupon.id, discountAmount: priced.discount.toFixed(2) }
+          : {};
+
+      if (priced && chargePrice <= 0 && coupon && coupon.ok) {
+        // 100%-off coupon: nothing to charge, so skip Iyzico entirely and
+        // grant the drop-in directly. The use is only counted if it was
+        // still available (guards the last-use race).
+        if (await redeemCoupon(coupon.coupon.id)) {
+          const todayKey = localDateKey(new Date(), studio.timezone);
+          await db.transaction(async (tx) => {
+            const [membership] = await tx
+              .insert(schema.memberships)
+              .values({
+                studioId: studio.id,
+                guestId: result.guestId,
+                type: "drop_in",
+                totalCredits: 1,
+                remainingCredits: 1,
+                startsOn: todayKey,
+                expiresOn: addMonthsToDateString(todayKey, 1),
+              })
+              .returning();
+            await tx.insert(schema.payments).values({
+              studioId: studio.id,
+              guestId: result.guestId,
+              bookingId: result.bookingId,
+              membershipId: membership.id,
+              purpose: "booking",
+              provider: "coupon",
+              amount: "0.00",
+              currency: studio.currency,
+              status: "success",
+              ...couponFields,
+            });
+          });
+          couponFullyCovered = true;
+        }
+      } else {
       try {
         const hdrs = await headers();
         const origin = hdrs.get("origin") ?? `https://${hdrs.get("host")}`;
@@ -111,7 +171,7 @@ export async function bookSessionAction(formData: FormData) {
 
         const init = await initializeCheckoutForm({
           conversationId,
-          price: dropIn.price.toFixed(2),
+          price: chargePrice.toFixed(2),
           currency: (studio.currency as "TRY" | "USD" | "EUR") ?? "TRY",
           basketId: `booking-${result.bookingId}`,
           // Embedding conversationId in the path, not relying on Iyzico to
@@ -144,7 +204,7 @@ export async function bookSessionAction(formData: FormData) {
               id: `session-${classSessionId}`,
               name: dropIn.label,
               category: "Class",
-              price: dropIn.price.toFixed(2),
+              price: chargePrice.toFixed(2),
             },
           ],
         });
@@ -157,10 +217,11 @@ export async function bookSessionAction(formData: FormData) {
           provider: "iyzico",
           providerConversationId: conversationId,
           providerToken: init.token ?? null,
-          amount: String(dropIn.price),
+          amount: chargePrice.toFixed(2),
           currency: studio.currency,
           status: init.status === "success" ? "pending" : "failed",
           rawResponse: JSON.stringify(init).slice(0, 8000),
+          ...couponFields,
         });
 
         if (init.status === "success" && init.paymentPageUrl) {
@@ -187,6 +248,7 @@ export async function bookSessionAction(formData: FormData) {
         // it can never be accidentally swallowed by this catch.
         console.error("Iyzico checkout initialize failed", err);
       }
+      }
     }
   }
 
@@ -196,6 +258,14 @@ export async function bookSessionAction(formData: FormData) {
   // booking's confirmation is sent from the Iyzico callback route instead,
   // once the payment has actually been confirmed server-to-server (never
   // here, before the guest has even reached the checkout page).
+  const hdrs2 = await headers();
+  const links = await buildGuestLinks({
+    bookingId: result.bookingId,
+    studioId: studio.id,
+    guestId: result.guestId,
+    origin: hdrs2.get("origin") ?? `https://${hdrs2.get("host")}`,
+  });
+
   if (guestForEmail?.email) {
     await sendBookingConfirmationEmail({
       to: guestForEmail.email,
@@ -208,8 +278,17 @@ export async function bookSessionAction(formData: FormData) {
         startsAt: sessionRow.startsAt,
         timezone: studio.timezone,
       },
+      cancelUrl: links.cancelUrl,
+      waiverUrl: links.waiverUrl,
+      cancelWindowHours: studio.cancelWindowHours,
     });
   }
 
-  redirect(backTo({ confirmed: String(classSessionId) }));
+  const confirmedUrl = backTo({ confirmed: String(classSessionId), ...(couponFullyCovered ? { paid: "1" } : {}) });
+  // First booking ever for this guest: send them to the one-time waiver,
+  // then back to the confirmation.
+  if (links.needsWaiver) {
+    redirect(`/book/waiver/${links.token}?back=${encodeURIComponent(confirmedUrl)}`);
+  }
+  redirect(confirmedUrl);
 }

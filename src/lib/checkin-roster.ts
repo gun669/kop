@@ -100,6 +100,7 @@ export type RosterEntry = {
   checkedInAt: Date | null;
   membershipType: (typeof schema.memberships.$inferSelect)["type"] | null;
   hasCoverage: boolean; // false = attended with no membership on file — flag for front desk
+  hasWaiver: boolean; // false = never signed the one-time waiver/health form
 };
 
 export async function buildRoster(classSessionId: number): Promise<RosterEntry[]> {
@@ -147,6 +148,7 @@ export async function buildRoster(classSessionId: number): Promise<RosterEntry[]
     checkedInAt: s.checkedInAt,
     membershipType: s.membershipType,
     hasCoverage: s.status !== "attended" || s.membershipType !== null,
+    hasWaiver: true,
   }));
 
   const signedInGuestIds = new Set(signInRows.map((s) => s.guestId));
@@ -163,7 +165,17 @@ export async function buildRoster(classSessionId: number): Promise<RosterEntry[]
       checkedInAt: null,
       membershipType: null,
       hasCoverage: true, // n/a — hasn't attended yet
+      hasWaiver: true,
     });
+  }
+
+  if (entries.length > 0) {
+    const signed = await db
+      .select({ guestId: schema.guestWaivers.guestId })
+      .from(schema.guestWaivers)
+      .where(inArray(schema.guestWaivers.guestId, entries.map((e) => e.guestId)));
+    const signedIds = new Set(signed.map((w) => w.guestId));
+    for (const e of entries) e.hasWaiver = signedIds.has(e.guestId);
   }
 
   const rank: Record<RosterEntry["status"], number> = {

@@ -237,6 +237,11 @@ export default async function CheckInPage({
                           >
                             {r.source === "online" ? "booked online" : "walk-in"}
                           </span>
+                          {!r.hasWaiver && r.status !== "late_cancel" && r.status !== "no_show" && (
+                            <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                              no waiver
+                            </span>
+                          )}
                         </div>
                         {r.status === "attended" && (
                           <div className="text-xs text-stone-400">

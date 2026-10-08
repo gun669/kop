@@ -92,6 +92,10 @@ export const studios = pgTable("studios", {
   city: varchar("city", { length: 80 }),
   timezone: varchar("timezone", { length: 60 }).notNull().default("UTC"),
   currency: varchar("currency", { length: 8 }).notNull().default("USD"),
+  // How many hours before a class starts a guest can still cancel for free
+  // from their emailed cancel link. Inside this window a cancel is a "late
+  // cancel": the spot is released but one class credit is forfeited.
+  cancelWindowHours: integer("cancel_window_hours").notNull().default(12),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -316,6 +320,11 @@ export const bookings = pgTable(
     // stops the same "see you tomorrow" email going out twice if more than
     // one hourly run lands inside the same lookahead window.
     reminderSentAt: timestamp("reminder_sent_at"),
+    // Unguessable token embedded in the guest's emailed "cancel" and
+    // "waiver" links (/book/cancel/[token], /book/waiver/[token]) — lets a
+    // guest act on their own booking without having an account. Null on
+    // bookings made before this existed; generated lazily when needed.
+    cancelToken: varchar("cancel_token", { length: 64 }).unique(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [uniqueIndex("booking_session_guest_unique").on(t.classSessionId, t.guestId)]
@@ -408,8 +417,58 @@ export const payments = pgTable("payments", {
   settledManually: boolean("settled_manually").notNull().default(false),
   settledOn: date("settled_on"),
   rawResponse: text("raw_response"),
+  // Set when a coupon code reduced this payment's price. `amount` is always
+  // what was actually charged; discountAmount is how much came off.
+  couponId: integer("coupon_id").references((): AnyPgColumn => coupons.id, {
+    onDelete: "set null",
+  }),
+  discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ---------- Coupon codes ----------
+export const couponTypeEnum = pgEnum("coupon_type", ["percent", "fixed"]);
+
+export const coupons = pgTable(
+  "coupons",
+  {
+    id: serial("id").primaryKey(),
+    studioId: integer("studio_id")
+      .notNull()
+      .references(() => studios.id, { onDelete: "cascade" }),
+    // Stored upper-case; matched case-insensitively.
+    code: varchar("code", { length: 40 }).notNull(),
+    discountType: couponTypeEnum("discount_type").notNull(),
+    // percent: 1-100. fixed: an amount in the studio's currency.
+    value: numeric("value", { precision: 12, scale: 2 }).notNull(),
+    expiresOn: date("expires_on"),
+    maxUses: integer("max_uses"),
+    usedCount: integer("used_count").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("coupon_studio_code_unique").on(t.studioId, t.code)]
+);
+
+// ---------- Waivers / health forms ----------
+// Signed once per guest (at their first booking); later bookings skip it.
+export const guestWaivers = pgTable(
+  "guest_waivers",
+  {
+    id: serial("id").primaryKey(),
+    studioId: integer("studio_id")
+      .notNull()
+      .references(() => studios.id, { onDelete: "cascade" }),
+    guestId: integer("guest_id")
+      .notNull()
+      .references(() => guests.id, { onDelete: "cascade" }),
+    signedName: varchar("signed_name", { length: 120 }).notNull(),
+    healthNotes: text("health_notes"),
+    emergencyContact: varchar("emergency_contact", { length: 200 }),
+    signedAt: timestamp("signed_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("waiver_studio_guest_unique").on(t.studioId, t.guestId)]
+);
 
 // ---------- Sign-ins / attendance ----------
 export const signIns = pgTable("sign_ins", {

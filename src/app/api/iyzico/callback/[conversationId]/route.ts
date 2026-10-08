@@ -32,6 +32,8 @@ import { retrieveCheckoutForm, checkoutFormWasSuccessful } from "@/lib/iyzico";
 import { addMonthsToDateString } from "@/lib/packages";
 import { localDateKey } from "@/lib/time";
 import { sendBookingConfirmationEmail } from "@/lib/email";
+import { redeemCoupon } from "@/lib/coupons";
+import { buildGuestLinks } from "@/lib/guest-links";
 
 async function handleCallback(req: NextRequest, conversationId: string) {
   // No slug known yet at this point — if conversationId itself is missing
@@ -63,6 +65,11 @@ async function handleCallback(req: NextRequest, conversationId: string) {
 
   // Use the token we already saved at initialize time — never depend on
   // Iyzico sending it back to us in the callback.
+  // Iyzico can hit this route more than once for the same payment (GET and
+  // POST); remember whether it was already settled so a coupon use is only
+  // counted the first time.
+  const alreadySettled = payment.status === "success";
+
   const result = await retrieveCheckoutForm(payment.providerToken, conversationId);
   const success = checkoutFormWasSuccessful(result);
 
@@ -112,6 +119,11 @@ async function handleCallback(req: NextRequest, conversationId: string) {
   // sellMembershipAction. This deliberately duplicates a little of that
   // logic rather than importing a server action from another route
   // segment.
+  if (payment.couponId && !alreadySettled) {
+    await redeemCoupon(payment.couponId);
+  }
+
+  let waiverRedirect: string | null = null;
   if (payment.guestId) {
     const todayKey = localDateKey(new Date(), studio.timezone);
     await db.transaction(async (tx) => {
@@ -147,7 +159,14 @@ async function handleCallback(req: NextRequest, conversationId: string) {
     // confirmed server-to-server and the credit's been granted. Never sent
     // from bookSessionAction itself for a paid booking (the guest hasn't
     // reached Iyzico's checkout yet at that point).
-    if (booking) {
+    if (booking && payment.bookingId) {
+      const links = await buildGuestLinks({
+        bookingId: payment.bookingId,
+        studioId: studio.id,
+        guestId: payment.guestId,
+        origin: new URL(req.url).origin,
+      });
+      if (links.needsWaiver) waiverRedirect = links.token;
       const [guest] = await db
         .select({ email: schema.guests.email, name: schema.guests.name })
         .from(schema.guests)
@@ -166,6 +185,9 @@ async function handleCallback(req: NextRequest, conversationId: string) {
             timezone: studio.timezone,
           },
           paid: { amount: payment.amount, currency: payment.currency ?? studio.currency },
+          cancelUrl: links.cancelUrl,
+          waiverUrl: links.waiverUrl,
+          cancelWindowHours: studio.cancelWindowHours,
         });
       }
     }
@@ -173,6 +195,11 @@ async function handleCallback(req: NextRequest, conversationId: string) {
 
   bookUrl.searchParams.set("paid", "1");
   if (booking) bookUrl.searchParams.set("confirmed", String(booking.classSessionId));
+  if (waiverRedirect) {
+    const waiverUrl = new URL(`/book/waiver/${waiverRedirect}`, req.url);
+    waiverUrl.searchParams.set("back", `${bookUrl.pathname}${bookUrl.search}`);
+    return NextResponse.redirect(waiverUrl);
+  }
   return NextResponse.redirect(bookUrl);
 }
 

@@ -19,6 +19,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   missing: "Please fill in your name and phone number.",
   payment_failed: "Your spot is booked, but the card payment didn't go through — please pay at the studio.",
   payment_not_found: "We couldn't find that payment — your spot may still be booked, please check at the studio.",
+  coupon_invalid: "That coupon code isn't valid — check the spelling or leave it blank.",
+  coupon_expired: "That coupon code has expired.",
+  coupon_used_up: "That coupon code has been used up.",
+  coupon_na: "Coupon codes only apply to online payment, which isn't available for this studio yet.",
   payment_missing_token: "Something went wrong confirming your payment — please pay at the studio.",
 };
 
@@ -308,6 +312,12 @@ export default async function PublicBookingPage({
                                 type="email"
                                 placeholder="Email (for your booking confirmation)"
                                 className="w-full rounded-lg border border-[#DDD5C7] bg-white px-3 py-2 text-sm text-[#52504E] placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
+                              />
+                              <input
+                                name="coupon"
+                                autoCapitalize="characters"
+                                placeholder="Coupon code (optional)"
+                                className="w-full rounded-lg border border-[#DDD5C7] bg-white px-3 py-2 text-sm uppercase text-[#52504E] placeholder:normal-case placeholder:text-[#52504E]/50 focus:border-[#8C3B28] focus:outline-none"
                               />
                               <button className="w-full rounded-lg border border-[#8C3B28] bg-[#8C3B28] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#7a3222]">
                                 Confirm spot

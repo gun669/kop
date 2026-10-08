@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq, gte, isNull, lt } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { sendClassReminderEmail } from "@/lib/email";
+import { buildGuestLinks } from "@/lib/guest-links";
 
 export async function GET(req: NextRequest) {
   // Vercel Cron sends `Authorization: Bearer ${CRON_SECRET}` automatically
@@ -37,6 +38,9 @@ export async function GET(req: NextRequest) {
   const due = await db
     .select({
       bookingId: schema.bookings.id,
+      studioId: schema.bookings.studioId,
+      guestId: schema.bookings.guestId,
+      cancelWindowHours: schema.studios.cancelWindowHours,
       guestName: schema.guests.name,
       guestEmail: schema.guests.email,
       studioName: schema.studios.name,
@@ -70,6 +74,12 @@ export async function GET(req: NextRequest) {
       skippedNoEmail++;
       continue;
     }
+    const links = await buildGuestLinks({
+      bookingId: row.bookingId,
+      studioId: row.studioId,
+      guestId: row.guestId,
+      origin: new URL(req.url).origin,
+    });
     const result = await sendClassReminderEmail({
       to: row.guestEmail,
       guestName: row.guestName,
@@ -81,6 +91,9 @@ export async function GET(req: NextRequest) {
         startsAt: row.startsAt,
         timezone: row.timezone,
       },
+      cancelUrl: links.cancelUrl,
+      waiverUrl: links.waiverUrl,
+      cancelWindowHours: row.cancelWindowHours,
     });
     if (result.sent) {
       sent++;

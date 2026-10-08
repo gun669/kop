@@ -61,6 +61,25 @@ function classLine(d: ClassDetails) {
     <p style="margin:0;font-size:14px;color:#57534e;">${escapeHtml(when)}${d.room ? ` · ${escapeHtml(d.room)}` : ""}</p>`;
 }
 
+// Optional action links shown under the class card: sign the one-time
+// waiver (only passed when the guest hasn't signed yet) and cancel the
+// booking (see /book/cancel/[token]).
+function linksBlock(links: { cancelUrl?: string; waiverUrl?: string; cancelWindowHours?: number }) {
+  const parts: string[] = [];
+  if (links.waiverUrl) {
+    parts.push(
+      `<p style="margin:16px 0 0;font-size:14px;color:#44403c;">First time with us? Please <a href="${escapeHtml(links.waiverUrl)}" style="color:#8C3B28;">complete the quick health &amp; waiver form</a> before your class.</p>`
+    );
+  }
+  if (links.cancelUrl) {
+    const win = links.cancelWindowHours ?? 12;
+    parts.push(
+      `<p style="margin:16px 0 0;font-size:13px;color:#78716c;">Can't make it? <a href="${escapeHtml(links.cancelUrl)}" style="color:#78716c;">Cancel your booking</a>. Cancelling more than ${win} hours before class is free; later than that costs one class credit.</p>`
+    );
+  }
+  return parts.join("");
+}
+
 // Sent right after a booking is confirmed — whether it was free (covered
 // by an existing membership / pay-at-studio) or just paid for online via
 // Iyzico. `paid` is only set for the latter, to show what was charged.
@@ -69,6 +88,9 @@ export async function sendBookingConfirmationEmail(params: {
   guestName: string;
   class: ClassDetails;
   paid?: { amount: string; currency: string };
+  cancelUrl?: string;
+  waiverUrl?: string;
+  cancelWindowHours?: number;
 }) {
   if (!isEmailConfigured()) return { sent: false as const, reason: "not_configured" as const };
   try {
@@ -83,7 +105,7 @@ export async function sendBookingConfirmationEmail(params: {
          params.paid
            ? `<p style="margin:0;font-size:14px;color:#44403c;">Paid online: ${escapeHtml(params.paid.amount)} ${escapeHtml(params.paid.currency)}</p>`
            : `<p style="margin:0;font-size:14px;color:#44403c;">Pay at the studio, or use a credit already on your account.</p>`
-       }`
+       }${linksBlock(params)}`
     );
     const result = await resend().emails.send({
       from: process.env.EMAIL_FROM!,
@@ -107,6 +129,9 @@ export async function sendClassReminderEmail(params: {
   to: string;
   guestName: string;
   class: ClassDetails;
+  cancelUrl?: string;
+  waiverUrl?: string;
+  cancelWindowHours?: number;
 }) {
   if (!isEmailConfigured()) return { sent: false as const, reason: "not_configured" as const };
   try {
@@ -116,7 +141,7 @@ export async function sendClassReminderEmail(params: {
       `<p style="margin:0 0 20px;font-size:14px;color:#44403c;">Hi ${escapeHtml(params.guestName)}, a reminder about your class:</p>
        <div style="padding:16px;border:1px solid #e7e5e4;border-radius:12px;">
          ${classLine(params.class)}
-       </div>`
+       </div>${linksBlock(params)}`
     );
     const result = await resend().emails.send({
       from: process.env.EMAIL_FROM!,
